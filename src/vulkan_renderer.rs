@@ -1,6 +1,6 @@
 use crate::egui_renderer::EguiRenderer;
+use crate::emulator::EmulatorState;
 use std::sync::Arc;
-use std::time::Duration;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
@@ -37,7 +37,7 @@ use vulkano::swapchain::Surface;
 use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
 use vulkano_util::context::{VulkanoConfig, VulkanoContext};
-use vulkano_util::window::VulkanoWindows;
+use vulkano_util::window::{VulkanoWindows, WindowDescriptor};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 
 pub(crate) struct VulkanRenderer {
@@ -161,7 +161,7 @@ impl VulkanRenderer {
             .request_redraw();
     }
 
-    pub(crate) fn redraw(&mut self, renderer_egui: &mut EguiRenderer) {
+    pub(crate) fn redraw(&mut self, renderer_egui: &mut EguiRenderer, emu_state: EmulatorState) {
         let window_size = self
             .windows
             .get_primary_renderer()
@@ -173,13 +173,25 @@ impl VulkanRenderer {
             return;
         }
 
-        let previous_frame_end = self.windows.get_primary_renderer_mut().unwrap().acquire(
-            Some(Duration::from_millis(1000)),
-            |_swapchain_images| {
-                self.rcx.as_mut().unwrap().viewport.extent = window_size.into();
-                renderer_egui.update_extent(window_size.into());
-            },
-        );
+        let previous_frame_end =
+            self.windows
+                .get_primary_renderer_mut()
+                .unwrap()
+                .acquire(None, |_swapchain_images| {
+                    // Update viewport, either 2/3 of width or 2/3 of height max
+                    let mut width = (window_size.width as f32 / 6.0) * 4.0;
+                    let mut height = (width / 10.0) * 9.0;
+
+                    if height > (window_size.height as f32 / 5.0) * 4.0 {
+                        height = (window_size.height as f32 / 5.0) * 4.0;
+                        width = (height / 9.0) * 10.0;
+                    }
+
+                    let offset_x = (window_size.width as f32 / 2.0 - width / 2.0) * 1.20;
+                    self.rcx.as_mut().unwrap().viewport.offset = [offset_x.round(), 0.0];
+                    self.rcx.as_mut().unwrap().viewport.extent = [width.round(), height.round()];
+                    renderer_egui.update_extent(window_size.into());
+                });
 
         // Create commandbuffer
         let mut builder = AutoCommandBufferBuilder::primary(
@@ -238,7 +250,7 @@ impl VulkanRenderer {
         unsafe { builder.draw(3, 1, 0, 0) }.unwrap();
 
         // Render egui pipeline
-        renderer_egui.render(&self.context, &self.windows, &mut builder);
+        renderer_egui.render(&self.context, &self.windows, &mut builder, emu_state);
 
         // Finish rendering state
         builder.end_rendering().unwrap();
@@ -263,8 +275,13 @@ impl VulkanRenderer {
             self.windows.remove_renderer(primary_window_id);
         }
 
+        let window_descriptor = WindowDescriptor {
+            width: 1280.0 * 1.25,
+            height: 720.0 * 1.25,
+            ..Default::default()
+        };
         self.windows
-            .create_window(event_loop, &self.context, &Default::default(), |_| {});
+            .create_window(event_loop, &self.context, &window_descriptor, |_| {});
     }
 
     fn create_pipeline(&mut self) -> Arc<GraphicsPipeline> {

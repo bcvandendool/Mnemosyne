@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+
+#[derive(Clone)]
 pub struct Registers {
     // Normal register
     pub A: u8,

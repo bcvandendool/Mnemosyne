@@ -4,11 +4,11 @@ pub struct NullMBC {}
 
 impl MBC for NullMBC {
     fn read(&self, address: u16) -> u8 {
-        todo!()
+        panic!()
     }
 
-    fn write(&self, address: u16, value: u8) {
-        todo!()
+    fn write(&mut self, address: u16, value: u8) {
+        panic!()
     }
 }
 

@@ -6,6 +6,7 @@ pub struct CPU {
     pub(crate) registers: Registers,
     pub(crate) mmu: MMU,
     to_set_IME: u8,
+    halted: bool,
 }
 
 impl CPU {
@@ -14,6 +15,7 @@ impl CPU {
             registers,
             mmu,
             to_set_IME: 0,
+            halted: false,
         }
     }
 
@@ -23,7 +25,70 @@ impl CPU {
         value
     }
 
+    fn handle_interrupt(&mut self) -> u32 {
+        // Reset IME
+        self.registers.IME = false;
+        let IE = self.mmu.read(0xFFFF);
+        let IF = self.mmu.read(0xFF0F);
+        let mut address = 0x00;
+
+        // Check VBlank
+        if IF & 0b1 > 0 && IE & 0b1 > 0 {
+            self.mmu.write(0xFF0F, IF & !0b1);
+            address = 0x40;
+        }
+
+        // Check LCD
+        if IF & 0b10 > 0 && IE & 0b10 > 0 {
+            self.mmu.write(0xFF0F, IF & !0b10);
+            address = 0x48;
+        }
+
+        // Check Timer
+        if IF & 0b100 > 0 && IE & 0b100 > 0 {
+            self.mmu.write(0xFF0F, IF & !0b100);
+            address = 0x50;
+        }
+
+        // Check Serial
+        if IF & 0b1000 > 0 && IE & 0b1000 > 0 {
+            self.mmu.write(0xFF0F, IF & !0b1000);
+            address = 0x58;
+        }
+
+        // Check Joypad
+        if IF & 0b10000 > 0 && IE & 0b10000 > 0 {
+            self.mmu.write(0xFF0F, IF & !0b10000);
+            address = 0x60;
+        }
+
+        let value = self.registers.PC;
+        self.registers.SP -= 1;
+        self.mmu.write(self.registers.SP, (value >> 8) as u8);
+        self.registers.SP -= 1;
+        self.mmu.write(self.registers.SP, value as u8);
+
+        self.registers.PC = address;
+
+        5
+    }
+
     pub(crate) fn process_instruction(&mut self) -> u32 {
+        if self.halted {
+            if self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0 {
+                self.halted = false;
+                if self.registers.IME {
+                    return self.handle_interrupt();
+                }
+            } else {
+                return 1;
+            }
+        }
+
+        if self.registers.IME && (self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0) {
+            return self.handle_interrupt();
+        }
+
         let instr = self.fetch_byte();
         let cycles = match instr {
             0x00 => 1,
@@ -273,6 +338,7 @@ impl CPU {
             0xFF => self.instr_RST(0x38),
             _ => panic!("Received invalid opcode: {:}", instr),
         };
+
         if self.to_set_IME == 1 {
             self.to_set_IME += 1;
         } else if self.to_set_IME == 2 {
@@ -1085,7 +1151,16 @@ impl CPU {
     }
 
     fn instr_HALT(&mut self) -> u32 {
-        // TODO:
+        if self.registers.IME {
+            self.halted = true;
+        } else if self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0 {
+            // Halt bug
+            // TODO: check if this is correct
+            self.registers.PC -= 1;
+        } else {
+            self.halted = true;
+        }
+
         0
     }
 
@@ -1367,7 +1442,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers.set_flag(Flag::HALF_CARRY, true);
         self.registers.set_flag(Flag::CARRY, false);
-        1
+        2
     }
 
     fn instr_AND_A_HL(&mut self) -> u32 {

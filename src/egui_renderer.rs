@@ -1,4 +1,5 @@
-use crate::ui::create_ui;
+use crate::emulator::EmulatorState;
+use crate::ui::{create_ui, UIContext, UIState};
 use egui::ahash::AHashMap;
 use egui::epaint::{ImageDelta, Primitive};
 use egui::{ClippedPrimitive, Context, Rect, TextureId};
@@ -66,6 +67,8 @@ pub struct EguiVertex {
 }
 
 pub(crate) struct EguiRenderer {
+    pub(crate) ui_state: UIState,
+    ui_context: UIContext,
     vertex_index_buffer_pool: SubbufferAllocator,
     font_sampler: Arc<Sampler>,
     font_format: Format,
@@ -143,6 +146,8 @@ impl EguiRenderer {
         };
 
         EguiRenderer {
+            ui_state: UIState::new(),
+            ui_context: UIContext::new(),
             vertex_index_buffer_pool,
             font_sampler,
             font_format,
@@ -602,6 +607,7 @@ impl EguiRenderer {
         vulkano_context: &VulkanoContext,
         vulkano_windows: &VulkanoWindows,
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        emu_state: EmulatorState,
     ) {
         let rcx = self.rcx.as_mut().unwrap();
         let egui_winit_state = &mut rcx.egui_winit_state;
@@ -611,7 +617,13 @@ impl EguiRenderer {
             egui_winit_state.take_egui_input(vulkano_windows.get_primary_window().unwrap());
         egui_winit_state.egui_ctx().begin_pass(raw_input);
 
-        create_ui(egui_context);
+        create_ui(
+            egui_context,
+            vulkano_windows.get_primary_window().unwrap().inner_size(),
+            &mut self.ui_state,
+            emu_state,
+            &mut self.ui_context,
+        );
 
         let full_output = egui_context.end_pass();
         egui_winit_state.handle_platform_output(

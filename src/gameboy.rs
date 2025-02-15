@@ -2,8 +2,11 @@ use crate::gameboy::cpu::CPU;
 use crate::gameboy::mmu::MMU;
 use crate::gameboy::registers::Reg;
 use crate::gameboy::registers::Registers;
+use crate::ui::Memories;
 
 pub mod cpu;
+pub(crate) mod disassembler;
+mod io_registers;
 mod mbc;
 pub mod mmu;
 pub mod registers;
@@ -25,7 +28,8 @@ impl GameBoy {
     }
 
     pub fn tick(&mut self) {
-        self.cpu.process_instruction();
+        let cycles = self.cpu.process_instruction();
+        self.cpu.mmu.io_registers.update_timers(cycles);
     }
 
     pub fn enable_test_memory(&mut self) {
@@ -74,5 +78,43 @@ impl GameBoy {
 
     pub fn get_final_memory(&mut self, address: u64) -> u64 {
         self.cpu.mmu.read(address as u16) as u64
+    }
+
+    pub fn dump_registers(&mut self) -> Registers {
+        self.cpu.registers.clone()
+    }
+
+    pub(crate) fn dump_ram(&mut self, memory_to_dump: Memories) -> Vec<u8> {
+        match memory_to_dump {
+            Memories::WRAM1 => self.cpu.mmu.internal_ram[0..4096].to_vec(),
+            Memories::WRAM2 => self.cpu.mmu.internal_ram[4096..].to_vec(),
+            Memories::HRAM => {
+                let mut mem = self.cpu.mmu.high_ram.to_vec();
+                mem.push(self.cpu.mmu.read(0xFFFF));
+                mem
+            }
+            _ => {
+                todo!("Implement remaining memories")
+            }
+        }
+    }
+
+    pub fn skip_boot_rom(&mut self) {
+        self.cpu.registers.A = 0x01;
+        self.cpu.registers.F = 0x00;
+        self.cpu.registers.B = 0xFF;
+        self.cpu.registers.C = 0x13;
+        self.cpu.registers.D = 0x00;
+        self.cpu.registers.E = 0xC1;
+        self.cpu.registers.H = 0x84;
+        self.cpu.registers.L = 0x03;
+        self.cpu.registers.PC = 0x0100;
+        self.cpu.registers.SP = 0xFFFE;
+        // Disabled boot rom
+        self.cpu.mmu.write(0xFF50, 0x01);
+    }
+
+    pub fn serial_buffer(&self) -> Vec<char> {
+        self.cpu.mmu.io_registers.serial_buffer().clone()
     }
 }

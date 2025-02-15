@@ -5,11 +5,12 @@ mod ui;
 mod vulkan_renderer;
 
 use crate::egui_renderer::EguiRenderer;
-use crate::emulator::Emulator;
+use crate::emulator::{Emulator, SyncMessage};
 use crate::vulkan_renderer::VulkanRenderer;
+use std::any::Any;
 use std::error::Error;
 use std::sync::mpsc;
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread::JoinHandle;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -20,13 +21,8 @@ struct App {
     renderer: VulkanRenderer,
     egui_renderer: EguiRenderer,
     join_handle: Option<JoinHandle<()>>,
+    rx: Receiver<SyncMessage>,
     tx: SyncSender<SyncMessage>,
-}
-
-enum SyncMessage {
-    FrameStart,
-    StateSynchronized,
-    Exit,
 }
 
 fn main() -> Result<(), impl Error> {
@@ -45,16 +41,18 @@ impl App {
             renderer.descriptor_set_allocator.clone(),
         );
 
-        let (tx, rx) = mpsc::sync_channel::<SyncMessage>(0);
+        let (tx_main, rx_emulator) = mpsc::sync_channel::<SyncMessage>(0);
+        let (tx_emulator, rx_main) = mpsc::sync_channel::<SyncMessage>(0);
 
-        let emulator = Emulator::new(rx, renderer.upload_buffer.clone());
+        let emulator = Emulator::new(rx_emulator, tx_emulator, renderer.upload_buffer.clone());
         let join_handle = Emulator::start(emulator);
 
         App {
             renderer,
             egui_renderer,
             join_handle: Some(join_handle),
-            tx,
+            rx: rx_main,
+            tx: tx_main,
         }
     }
 }
@@ -90,9 +88,14 @@ impl ApplicationHandler for App {
                 self.renderer.resize();
             }
             WindowEvent::RedrawRequested => {
-                self.tx.send(SyncMessage::FrameStart).ok();
-                self.tx.send(SyncMessage::StateSynchronized).ok();
-                self.renderer.redraw(&mut self.egui_renderer);
+                self.tx
+                    .send(SyncMessage::FrameStart(self.egui_renderer.ui_state.clone()))
+                    .ok();
+                let emu_state = match self.rx.recv().ok().unwrap() {
+                    SyncMessage::StateSynchronized(emu_state) => emu_state,
+                    _ => panic!("Unexpected message received on main thread"),
+                };
+                self.renderer.redraw(&mut self.egui_renderer, emu_state);
             }
             _ => {}
         }
