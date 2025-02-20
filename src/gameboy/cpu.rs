@@ -63,9 +63,9 @@ impl CPU {
         }
 
         let value = self.registers.PC;
-        self.registers.SP -= 1;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
-        self.registers.SP -= 1;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, value as u8);
 
         self.registers.PC = address;
@@ -73,20 +73,20 @@ impl CPU {
         5
     }
 
-    pub(crate) fn process_instruction(&mut self) -> u32 {
+    pub(crate) fn process_instruction(&mut self) -> (bool, u32) {
         if self.halted {
             if self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0 {
                 self.halted = false;
                 if self.registers.IME {
-                    return self.handle_interrupt();
+                    return (false, self.handle_interrupt());
                 }
             } else {
-                return 1;
+                return (false, 1);
             }
         }
 
         if self.registers.IME && (self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0) {
-            return self.handle_interrupt();
+            return (false, self.handle_interrupt());
         }
 
         let instr = self.fetch_byte();
@@ -336,7 +336,10 @@ impl CPU {
             0xFB => self.instr_EI(),
             0xFE => self.instr_CP_A_n8(),
             0xFF => self.instr_RST(0x38),
-            _ => panic!("Received invalid opcode: {:}", instr),
+            _ => panic!(
+                "Received invalid opcode: {:#04X}, PC={:#06X}",
+                instr, self.registers.PC
+            ),
         };
 
         if self.to_set_IME == 1 {
@@ -345,7 +348,7 @@ impl CPU {
             self.registers.IME = true;
             self.to_set_IME = 0;
         }
-        cycles
+        (instr == 0x40, cycles)
     }
 
     fn process_CB_instruction(&mut self) -> u32 {
@@ -926,7 +929,7 @@ impl CPU {
         if offset >= 0 {
             self.registers.PC = self.registers.PC.wrapping_add(offset as u16);
         } else {
-            self.registers.PC = self.registers.PC.wrapping_sub((-(offset as i16)) as u16);
+            self.registers.PC = self.registers.PC.wrapping_sub(offset.unsigned_abs() as u16);
         }
         3
     }
@@ -1592,9 +1595,9 @@ impl CPU {
             || (cc == ConditionCode::NZ && !self.registers.has_flag(Flag::ZERO))
         {
             let value_lo = self.mmu.read(self.registers.SP);
-            self.registers.SP += 1;
+            self.registers.SP = self.registers.SP.wrapping_add(1);
             let value_hi = self.mmu.read(self.registers.SP);
-            self.registers.SP += 1;
+            self.registers.SP = self.registers.SP.wrapping_add(1);
             self.registers.PC = (value_hi as u16) << 8 | value_lo as u16;
             5
         } else {
@@ -1604,9 +1607,9 @@ impl CPU {
 
     fn instr_POP_r16(&mut self, register: Reg) -> u32 {
         let value_lo = self.mmu.read(self.registers.SP);
-        self.registers.SP += 1;
+        self.registers.SP = self.registers.SP.wrapping_add(1);
         let value_hi = self.mmu.read(self.registers.SP);
-        self.registers.SP += 1;
+        self.registers.SP = self.registers.SP.wrapping_add(1);
         let value = (value_hi as u16) << 8 | value_lo as u16;
 
         match register {
@@ -1634,9 +1637,9 @@ impl CPU {
                 panic!("instr_PUSH_r16 received invalid register: {:?}", register)
             }
         };
-        self.registers.SP -= 1;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
-        self.registers.SP -= 1;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, value as u8);
         4
     }
@@ -1676,9 +1679,9 @@ impl CPU {
         let address = (address_hi as u16) << 8 | address_lo as u16;
 
         let value = self.registers.PC;
-        self.registers.SP -= 1;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
-        self.registers.SP -= 1;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, value as u8);
 
         self.registers.PC = address;
@@ -1695,9 +1698,9 @@ impl CPU {
             || (cc == ConditionCode::NZ && !self.registers.has_flag(Flag::ZERO))
         {
             let value = self.registers.PC;
-            self.registers.SP -= 1;
+            self.registers.SP = self.registers.SP.wrapping_sub(1);
             self.mmu.write(self.registers.SP, (value >> 8) as u8);
-            self.registers.SP -= 1;
+            self.registers.SP = self.registers.SP.wrapping_sub(1);
             self.mmu.write(self.registers.SP, value as u8);
             self.registers.PC = address;
             6
@@ -1708,9 +1711,9 @@ impl CPU {
 
     fn instr_RST(&mut self, vec: u16) -> u32 {
         let value = self.registers.PC;
-        self.registers.SP -= 1;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
-        self.registers.SP -= 1;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, value as u8);
 
         self.registers.PC = vec;
@@ -1719,9 +1722,9 @@ impl CPU {
 
     fn instr_RET(&mut self) -> u32 {
         let value_lo = self.mmu.read(self.registers.SP);
-        self.registers.SP += 1;
+        self.registers.SP = self.registers.SP.wrapping_add(1);
         let value_hi = self.mmu.read(self.registers.SP);
-        self.registers.SP += 1;
+        self.registers.SP = self.registers.SP.wrapping_add(1);
         self.registers.PC = (value_hi as u16) << 8 | value_lo as u16;
         4
     }
@@ -1729,9 +1732,9 @@ impl CPU {
     fn instr_RETI(&mut self) -> u32 {
         self.to_set_IME = 2;
         let value_lo = self.mmu.read(self.registers.SP);
-        self.registers.SP += 1;
+        self.registers.SP = self.registers.SP.wrapping_add(1);
         let value_hi = self.mmu.read(self.registers.SP);
-        self.registers.SP += 1;
+        self.registers.SP = self.registers.SP.wrapping_add(1);
         self.registers.PC = (value_hi as u16) << 8 | value_lo as u16;
         4
     }

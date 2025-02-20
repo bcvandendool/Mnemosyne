@@ -34,7 +34,10 @@ impl MBC for ROMOnly {
                 }
             }
             _ => {
-                panic!("Tried to write to cartridge with invalid address!")
+                println!(
+                    "Tried to write to cartridge with invalid address: {}",
+                    address
+                )
             }
         }
     }

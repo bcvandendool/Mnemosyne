@@ -3,16 +3,21 @@ use crate::gameboy::mmu::MMU;
 use crate::gameboy::registers::Reg;
 use crate::gameboy::registers::Registers;
 use crate::ui::Memories;
+use winit::keyboard::PhysicalKey;
 
+mod apu;
 pub mod cpu;
 pub(crate) mod disassembler;
+mod dma;
 mod io_registers;
 mod mbc;
 pub mod mmu;
+mod ppu;
 pub mod registers;
 
 pub struct GameBoy {
     cpu: CPU,
+    hit_breakpoint: bool,
 }
 
 impl GameBoy {
@@ -20,7 +25,10 @@ impl GameBoy {
         let registers = Registers::new();
         let mmu = MMU::new();
         let cpu = CPU::new(registers, mmu);
-        GameBoy { cpu }
+        GameBoy {
+            cpu,
+            hit_breakpoint: false,
+        }
     }
 
     pub fn load_rom(&mut self, rom_name: &str) {
@@ -28,8 +36,16 @@ impl GameBoy {
     }
 
     pub fn tick(&mut self) {
-        let cycles = self.cpu.process_instruction();
-        self.cpu.mmu.io_registers.update_timers(cycles);
+        let (hit_breakpoint, cycles) = self.cpu.process_instruction();
+        self.cpu.mmu.io_registers.update_timers(cycles * 4);
+        self.cpu.mmu.ppu.tick(cycles * 4);
+        self.cpu.mmu.tick(cycles * 4);
+        self.cpu.mmu.handle_ppu_interrupts();
+        self.hit_breakpoint = hit_breakpoint;
+    }
+
+    pub fn hit_breakpoint(&self) -> bool {
+        self.hit_breakpoint
     }
 
     pub fn enable_test_memory(&mut self) {
@@ -93,6 +109,12 @@ impl GameBoy {
                 mem.push(self.cpu.mmu.read(0xFFFF));
                 mem
             }
+            Memories::TileData => self.cpu.mmu.ppu.tile_data.to_vec(),
+            Memories::BackgroundMaps => {
+                let mut mem = self.cpu.mmu.ppu.background_map_1.to_vec();
+                mem.extend(self.cpu.mmu.ppu.background_map_2.iter());
+                mem
+            }
             _ => {
                 todo!("Implement remaining memories")
             }
@@ -111,10 +133,26 @@ impl GameBoy {
         self.cpu.registers.PC = 0x0100;
         self.cpu.registers.SP = 0xFFFE;
         // Disabled boot rom
-        self.cpu.mmu.write(0xFF50, 0x01);
+        self.cpu.mmu.write(0xFF50, 0x00);
     }
 
     pub fn serial_buffer(&self) -> Vec<char> {
         self.cpu.mmu.io_registers.serial_buffer().clone()
+    }
+
+    pub fn get_framebuffer(&self) -> Vec<u8> {
+        self.cpu.mmu.ppu.frame_buffer_vblanked.clone()
+    }
+
+    pub fn key_pressed(&mut self, physical_key: PhysicalKey) {
+        if let PhysicalKey::Code(key_code) = physical_key {
+            self.cpu.mmu.io_registers.inputs.insert(key_code, true);
+        }
+    }
+
+    pub fn key_released(&mut self, physical_key: PhysicalKey) {
+        if let PhysicalKey::Code(key_code) = physical_key {
+            self.cpu.mmu.io_registers.inputs.insert(key_code, false);
+        }
     }
 }

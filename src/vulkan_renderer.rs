@@ -33,7 +33,7 @@ use vulkano::pipeline::{
     PipelineShaderStageCreateInfo,
 };
 use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
-use vulkano::swapchain::Surface;
+use vulkano::swapchain::{PresentMode, Surface};
 use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
 use vulkano_util::context::{VulkanoConfig, VulkanoContext};
@@ -72,6 +72,7 @@ impl VulkanRenderer {
             },
             instance_create_info: InstanceCreateInfo {
                 enabled_extensions: Surface::required_extensions(event_loop).unwrap(),
+                application_name: Some("Mnemosyne".parse().unwrap()),
                 ..Default::default()
             },
             ..Default::default()
@@ -278,6 +279,10 @@ impl VulkanRenderer {
         let window_descriptor = WindowDescriptor {
             width: 1280.0 * 1.25,
             height: 720.0 * 1.25,
+            present_mode: PresentMode::Mailbox,
+
+            title: "Mnemosyne".parse().unwrap(),
+
             ..Default::default()
         };
         self.windows
