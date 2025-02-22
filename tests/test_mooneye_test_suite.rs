@@ -213,8 +213,8 @@ mod emulator_only_mbc5 {
 
 #[cfg(test)]
 mod manual_only {
-    use image::{GenericImageView, ImageReader};
     use Mnemosyne::gameboy::GameBoy;
+    use image::{GenericImageView, ImageReader};
 
     #[test]
     fn test() {
@@ -249,7 +249,7 @@ mod manual_only {
         .unwrap()
         .decode()
         .unwrap();
-        let test = img.pixels().flat_map(|a| a.2 .0).collect::<Vec<u8>>();
+        let test = img.pixels().flat_map(|a| a.2.0).collect::<Vec<u8>>();
 
         assert_eq!(output_img, test);
     }

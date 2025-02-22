@@ -1,5 +1,5 @@
-use image::{GenericImageView, ImageReader};
 use Mnemosyne::gameboy::GameBoy;
+use image::{GenericImageView, ImageReader};
 #[test]
 fn test() {
     let mut gameboy = GameBoy::new();
@@ -31,7 +31,7 @@ fn test() {
         .unwrap()
         .decode()
         .unwrap();
-    let test = img.pixels().flat_map(|a| a.2 .0).collect::<Vec<u8>>();
+    let test = img.pixels().flat_map(|a| a.2.0).collect::<Vec<u8>>();
 
     assert_eq!(output_img, test);
 }

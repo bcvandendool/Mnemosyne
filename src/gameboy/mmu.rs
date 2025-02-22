@@ -1,7 +1,7 @@
 use crate::gameboy::apu::APU;
 use crate::gameboy::io_registers::IORegisters;
-use crate::gameboy::mbc::{create_MBC, MBC};
-use crate::gameboy::ppu::{PPUMode, PPU};
+use crate::gameboy::mbc::{MBC, create_MBC};
+use crate::gameboy::ppu::{PPU, PPUMode};
 use std::fs;
 
 pub struct MMU {

@@ -1,6 +1,6 @@
-use serde_json::Value;
-use Mnemosyne::gameboy::registers::Reg;
 use Mnemosyne::gameboy::GameBoy;
+use Mnemosyne::gameboy::registers::Reg;
+use serde_json::Value;
 
 pub fn create_gameboy() -> GameBoy {
     let mut gameboy = GameBoy::new();

@@ -32,7 +32,9 @@ mod cpu_instrs {
 
     #[test]
     fn test_02() {
-        let mut gameboy = setup("../../tests/game-boy-test-roms/artifacts/blargg/cpu_instrs/individual/02-interrupts.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/cpu_instrs/individual/02-interrupts.gb",
+        );
 
         for _ in 0..1500000 {
             gameboy.tick();
@@ -120,8 +122,9 @@ mod cpu_instrs {
 
     #[test]
     fn test_07() {
-        let mut gameboy =
-            setup("../../tests/game-boy-test-roms/artifacts/blargg/cpu_instrs/individual/07-jr,jp,call,ret,rst.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/cpu_instrs/individual/07-jr,jp,call,ret,rst.gb",
+        );
 
         for _ in 0..1500000 {
             gameboy.tick();
@@ -137,7 +140,9 @@ mod cpu_instrs {
 
     #[test]
     fn test_08() {
-        let mut gameboy = setup("../../tests/game-boy-test-roms/artifacts/blargg/cpu_instrs/individual/08-misc instrs.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/cpu_instrs/individual/08-misc instrs.gb",
+        );
 
         for _ in 0..1500000 {
             gameboy.tick();
@@ -325,8 +330,9 @@ mod dmg_sound {
 
     #[test]
     fn test_07() {
-        let mut gameboy =
-            setup("../../tests/game-boy-test-roms/artifacts/blargg/dmg_sound/rom_singles/07-len sweep period sync.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/dmg_sound/rom_singles/07-len sweep period sync.gb",
+        );
 
         for _ in 0..1500000 {
             gameboy.tick();
@@ -343,7 +349,9 @@ mod dmg_sound {
 
     #[test]
     fn test_08() {
-        let mut gameboy = setup("../../tests/game-boy-test-roms/artifacts/blargg/dmg_sound/rom_singles/08-len ctr during power.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/dmg_sound/rom_singles/08-len ctr during power.gb",
+        );
 
         for _ in 0..1500000 {
             gameboy.tick();
@@ -554,8 +562,9 @@ mod oam_bug {
 
     #[test]
     fn test_07() {
-        let mut gameboy =
-            setup("../../tests/game-boy-test-roms/artifacts/blargg/oam_bug/rom_singles/7-timing_effect.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/oam_bug/rom_singles/7-timing_effect.gb",
+        );
 
         for _ in 0..1500000 {
             gameboy.tick();
@@ -595,7 +604,9 @@ mod mem_timing {
 
     #[test]
     fn test_01() {
-        let mut gameboy = setup("../../tests/game-boy-test-roms/artifacts/blargg/mem_timing/individual/01-read_timing.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/mem_timing/individual/01-read_timing.gb",
+        );
 
         for _ in 0..12000000 {
             gameboy.tick();
@@ -612,8 +623,9 @@ mod mem_timing {
 
     #[test]
     fn test_02() {
-        let mut gameboy =
-            setup("../../tests/game-boy-test-roms/artifacts/blargg/mem_timing/individual/02-write_timing.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/mem_timing/individual/02-write_timing.gb",
+        );
 
         for _ in 0..12000000 {
             gameboy.tick();
@@ -630,8 +642,9 @@ mod mem_timing {
 
     #[test]
     fn test_03() {
-        let mut gameboy =
-            setup("../../tests/game-boy-test-roms/artifacts/blargg/mem_timing/individual/03-modify_timing.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/mem_timing/individual/03-modify_timing.gb",
+        );
 
         for _ in 0..12000000 {
             gameboy.tick();
@@ -648,8 +661,9 @@ mod mem_timing {
 
     #[test]
     fn test_01_v2() {
-        let mut gameboy =
-            setup("../../tests/game-boy-test-roms/artifacts/blargg/mem_timing-2/rom_singles/01-read_timing.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/mem_timing-2/rom_singles/01-read_timing.gb",
+        );
 
         for _ in 0..12000000 {
             gameboy.tick();
@@ -667,8 +681,9 @@ mod mem_timing {
 
     #[test]
     fn test_02_v2() {
-        let mut gameboy =
-            setup("../../tests/game-boy-test-roms/artifacts/blargg/mem_timing-2/rom_singles/02-write_timing.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/mem_timing-2/rom_singles/02-write_timing.gb",
+        );
 
         for _ in 0..12000000 {
             gameboy.tick();
@@ -686,8 +701,9 @@ mod mem_timing {
 
     #[test]
     fn test_03_v2() {
-        let mut gameboy =
-            setup("../../tests/game-boy-test-roms/artifacts/blargg/mem_timing-2/rom_singles/03-modify_timing.gb");
+        let mut gameboy = setup(
+            "../../tests/game-boy-test-roms/artifacts/blargg/mem_timing-2/rom_singles/03-modify_timing.gb",
+        );
 
         for _ in 0..12000000 {
             gameboy.tick();

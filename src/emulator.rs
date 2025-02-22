@@ -1,5 +1,5 @@
-use crate::gameboy::registers::Registers;
 use crate::gameboy::GameBoy;
+use crate::gameboy::registers::Registers;
 use crate::ui::UIState;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread;
