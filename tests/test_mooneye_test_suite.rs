@@ -187,7 +187,7 @@ mod emulator_only_mbc2 {
     #[test_matrix(["bits_ramg", "bits_romb", "bits_unused", "ram", "rom_1Mb", "rom_2Mb", "rom_512kb"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc1/"
+            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc2/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -203,7 +203,7 @@ mod emulator_only_mbc5 {
     #[test_matrix(["rom_1Mb", "rom_2Mb", "rom_4Mb", "rom_8Mb", "rom_16Mb", "rom_32Mb", "rom_64Mb", "rom_512kb"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc1/"
+            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc5/"
                 .to_owned()
                 + test
                 + ".gb"),

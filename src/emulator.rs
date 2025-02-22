@@ -46,7 +46,7 @@ impl Emulator {
 
     fn run(&self) {
         let mut gameboy = GameBoy::new();
-        gameboy.load_rom("rex-run.gb");
+        gameboy.load_rom("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc5/rom_512kb.gb");
         gameboy.skip_boot_rom();
 
         loop {

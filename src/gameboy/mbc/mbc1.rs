@@ -1,4 +1,5 @@
 use crate::gameboy::mbc::MBC;
+use intbits::Bits;
 
 pub struct MBC1 {
     rom: Vec<u8>,
@@ -21,26 +22,26 @@ impl MBC for MBC1 {
         match address {
             0x0000..=0x3FFF => {
                 let mut mapped_address = if self.reg_banking_mode {
-                    ((self.reg_ram_bank_number as usize) << 19) | ((address & 0x3FFF) as usize)
+                    ((self.reg_ram_bank_number as usize) << 19) | (address.bits(0..14) as usize)
                 } else {
-                    (address & 0x3FFF) as usize
+                    address.bits(0..14) as usize
                 };
                 mapped_address &= (1 << (self.rom_banks.ilog2() + 14)) - 1;
                 self.rom[mapped_address]
             }
             0x4000..=0x7FFF => {
                 let mut mapped_address = ((self.reg_ram_bank_number as usize) << 19)
-                    | (((self.reg_rom_bank_number & 0x1F) as usize) << 14)
-                    | ((address & 0x3FFF) as usize);
+                    | ((self.reg_rom_bank_number.bits(0..5) as usize) << 14)
+                    | (address.bits(0..14) as usize);
                 mapped_address &= (1 << (self.rom_banks.ilog2() + 14)) - 1;
                 self.rom[mapped_address]
             }
             0xA000..=0xBFFF => {
                 if self.has_ram && self.reg_ram_enabled {
                     let mut mapped_address = if self.reg_banking_mode {
-                        ((self.reg_ram_bank_number as usize) << 13) | ((address & 0x1FFF) as usize)
+                        ((self.reg_ram_bank_number as usize) << 13) | (address.bits(0..13) as usize)
                     } else {
-                        (address & 0x1FFF) as usize
+                        address.bits(0..13) as usize
                     };
                     mapped_address &= (1 << (self.ram_banks.ilog2() + 13)) - 1;
                     self.ram[mapped_address]
@@ -58,27 +59,27 @@ impl MBC for MBC1 {
         match address {
             0x0000..=0x1FFF => {
                 // RAM enable
-                self.reg_ram_enabled = value & 0x0F == 0x0A;
+                self.reg_ram_enabled = value.bits(0..4) == 0x0A;
                 // TODO: save on disable
             }
             0x2000..=0x3FFF => {
                 // ROM bank number
-                self.reg_rom_bank_number = (value & 0x1F).max(1);
+                self.reg_rom_bank_number = value.bits(0..5).max(1);
             }
             0x4000..=0x5FFF => {
                 // RAM bank number - or - upper bits of ROM bank number
-                self.reg_ram_bank_number = value & 0x3;
+                self.reg_ram_bank_number = value.bits(0..2);
             }
             0x6000..=0x7FFF => {
                 // Banking mode select
-                self.reg_banking_mode = value & 0x01 == 0x01;
+                self.reg_banking_mode = value.bit(0);
             }
             0xA000..=0xBFFF => {
                 if self.has_ram && self.reg_ram_enabled {
                     let mut mapped_address = if self.reg_banking_mode {
-                        ((self.reg_ram_bank_number as usize) << 13) | ((address & 0x1FFF) as usize)
+                        ((self.reg_ram_bank_number as usize) << 13) | (address.bits(0..13) as usize)
                     } else {
-                        (address & 0x1FFF) as usize
+                        address.bits(0..13) as usize
                     };
                     mapped_address &= (1 << (self.ram_banks.ilog2() + 13)) - 1;
                     self.ram[mapped_address] = value;

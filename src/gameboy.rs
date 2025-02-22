@@ -8,7 +8,6 @@ use winit::keyboard::PhysicalKey;
 mod apu;
 pub mod cpu;
 pub(crate) mod disassembler;
-mod dma;
 mod io_registers;
 mod mbc;
 pub mod mmu;

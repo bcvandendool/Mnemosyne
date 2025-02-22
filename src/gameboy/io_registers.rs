@@ -26,15 +26,15 @@ impl IORegisters {
     pub fn new() -> Self {
         IORegisters {
             // IO registers
-            FF00_JOYP: 0x00,
+            FF00_JOYP: 0xC0,
             FF01_serial_transfer_data: 0xFF,
             FF01_serial_transfer_buffer: Vec::new(),
-            FF02_serial_transfer_control: 0x00,
+            FF02_serial_transfer_control: 0x7E,
             FF04_DIV_divider_register: 0x00,
             FF05_TIMA_timer_counter: 0x00,
             FF06_TMA_timer_modulo: 0x00,
-            FF07_TAC_timer_control: 0x00,
-            FF0F_IF_interrupt_flag: 0x00,
+            FF07_TAC_timer_control: 0xF8,
+            FF0F_IF_interrupt_flag: 0xE0,
             FF50_boot_rom_enabled: true,
             FFFF_IE_interrupt_enable: 0x00,
             // Internal state
@@ -82,22 +82,22 @@ impl IORegisters {
             0xFF04 => self.FF04_DIV_divider_register,
             0xFF05 => self.FF05_TIMA_timer_counter,
             0xFF06 => self.FF06_TMA_timer_modulo,
-            0xFF07 => self.FF07_TAC_timer_control,
-            0xFF0F => self.FF0F_IF_interrupt_flag,
+            0xFF07 => self.FF07_TAC_timer_control | 0xF8,
+            0xFF0F => self.FF0F_IF_interrupt_flag | 0xE0,
             0xFF50 => 0xFF,
             0xFFFF => self.FFFF_IE_interrupt_enable,
-            _ => 0xFF, // TODO: implement all io registers
+            _ => 0xFF,
         }
     }
 
     pub fn write(&mut self, address: u16, value: u8) {
         match address {
-            0xFF00 => self.FF00_JOYP = value,
+            0xFF00 => self.FF00_JOYP = value | 0xC0,
             0xFF01 => {
                 self.FF01_serial_transfer_data = value;
                 self.FF01_serial_transfer_buffer.push(value as char);
             }
-            0xFF02 => self.FF02_serial_transfer_control = value,
+            0xFF02 => self.FF02_serial_transfer_control = value | 0x7E,
             0xFF04 => self.FF04_DIV_divider_register = value,
             0xFF05 => self.FF05_TIMA_timer_counter = value,
             0xFF06 => self.FF06_TMA_timer_modulo = value,

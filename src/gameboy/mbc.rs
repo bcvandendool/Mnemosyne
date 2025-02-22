@@ -1,8 +1,14 @@
 use crate::gameboy::mbc::mbc1::MBC1;
+use crate::gameboy::mbc::mbc2::MBC2;
+use crate::gameboy::mbc::mbc3::MBC3;
+use crate::gameboy::mbc::mbc5::MBC5;
 use crate::gameboy::mbc::null::NullMBC;
 use crate::gameboy::mbc::rom_only::ROMOnly;
 
 mod mbc1;
+mod mbc2;
+mod mbc3;
+mod mbc5;
 mod null;
 mod rom_only;
 
@@ -71,10 +77,98 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             header.ram_size,
             true,
         )),
-        0x05 => todo!("Implement MBC2"),
-        0x06 => todo!("Implement MBC2"),
+        0x05 => Box::new(MBC2::new(&rom, header.rom_size, false)),
+        0x06 => Box::new(MBC2::new(&rom, header.rom_size, true)),
         0x08 => Box::new(ROMOnly::new(&rom, true, header.ram_size, false)),
         0x09 => Box::new(ROMOnly::new(&rom, true, header.ram_size, true)),
+        0x0F => Box::new(MBC3::new(
+            &rom,
+            header.rom_size,
+            false,
+            header.ram_size,
+            true,
+            true,
+        )),
+        0x10 => Box::new(MBC3::new(
+            &rom,
+            header.rom_size,
+            true,
+            header.ram_size,
+            true,
+            true,
+        )),
+        0x11 => Box::new(MBC3::new(
+            &rom,
+            header.rom_size,
+            false,
+            header.ram_size,
+            false,
+            false,
+        )),
+        0x12 => Box::new(MBC3::new(
+            &rom,
+            header.rom_size,
+            true,
+            header.ram_size,
+            false,
+            false,
+        )),
+        0x13 => Box::new(MBC3::new(
+            &rom,
+            header.rom_size,
+            true,
+            header.ram_size,
+            true,
+            false,
+        )),
+        0x19 => Box::new(MBC5::new(
+            &rom,
+            header.rom_size,
+            false,
+            header.ram_size,
+            false,
+            false,
+        )),
+        0x1A => Box::new(MBC5::new(
+            &rom,
+            header.rom_size,
+            true,
+            header.ram_size,
+            false,
+            false,
+        )),
+        0x1B => Box::new(MBC5::new(
+            &rom,
+            header.rom_size,
+            true,
+            header.ram_size,
+            true,
+            false,
+        )),
+        0x1C => Box::new(MBC5::new(
+            &rom,
+            header.rom_size,
+            false,
+            header.ram_size,
+            false,
+            true,
+        )),
+        0x1D => Box::new(MBC5::new(
+            &rom,
+            header.rom_size,
+            true,
+            header.ram_size,
+            false,
+            true,
+        )),
+        0x1E => Box::new(MBC5::new(
+            &rom,
+            header.rom_size,
+            true,
+            header.ram_size,
+            true,
+            true,
+        )),
         _ => panic!("Unknown cartridge type!"),
     }
 }
@@ -97,7 +191,7 @@ fn parse_rom_size(data: u8) -> usize {
 fn parse_ram_size(data: u8) -> usize {
     match data {
         0x00 => 0,
-        0x02 => 1 * 8192,
+        0x02 => 8192,
         0x03 => 4 * 8192,
         0x04 => 16 * 8192,
         0x05 => 8 * 8192,

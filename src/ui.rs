@@ -49,7 +49,8 @@ impl UIContext {
         let ps = builder.build();
         let disassembler = Disassembler::new();
         let boot_rom = disassembler.disassemble_section(
-            &include_bytes!("./roms/Legend of Zelda, The - Link's Awakening.gb").to_vec(),
+            &include_bytes!("../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc5/rom_512kb.gb")
+                .to_vec(),
             0x00,
             0x7FFF,
         );
