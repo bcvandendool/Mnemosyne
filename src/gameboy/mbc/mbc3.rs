@@ -2,6 +2,7 @@ use crate::gameboy::mbc::MBC;
 use intbits::Bits;
 
 pub(crate) struct MBC3 {
+    name: String,
     rom: Vec<u8>,
     rom_size: usize,
     rom_banks: usize,
@@ -22,7 +23,7 @@ impl MBC for MBC3 {
         match address {
             0x000..=0x3FFF => self.rom[address.bits(0..14) as usize],
             0x4000..=0x7FFF => {
-                let mut mapped_address =
+                let mapped_address =
                     ((self.reg_rom_bank_number as usize) << 14) | (address.bits(0..14) as usize);
                 self.rom[mapped_address]
             }
@@ -79,11 +80,16 @@ impl MBC for MBC3 {
             _ => {}
         }
     }
+
+    fn name(&self) -> String {
+        self.name.clone()
+    }
 }
 
 impl MBC3 {
     // TODO: implement timer
     pub(crate) fn new(
+        name: String,
         rom: &[u8],
         rom_size: usize,
         has_ram: bool,
@@ -92,6 +98,7 @@ impl MBC3 {
         has_timer: bool,
     ) -> Self {
         MBC3 {
+            name,
             rom: rom.to_vec(),
             rom_size,
             rom_banks: rom_size / 16384,

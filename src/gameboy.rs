@@ -36,10 +36,6 @@ impl GameBoy {
 
     pub fn tick(&mut self) {
         let (hit_breakpoint, cycles) = self.cpu.process_instruction();
-        self.cpu.mmu.io_registers.update_timers(cycles * 4);
-        self.cpu.mmu.ppu.tick(cycles * 4);
-        self.cpu.mmu.tick(cycles * 4);
-        self.cpu.mmu.handle_ppu_interrupts();
         self.hit_breakpoint = hit_breakpoint;
     }
 

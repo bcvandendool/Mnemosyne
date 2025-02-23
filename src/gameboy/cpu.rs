@@ -73,7 +73,15 @@ impl CPU {
         5
     }
 
+    fn tick_dot(&mut self, cycles: u32) {
+        self.mmu.io_registers.update_timers(cycles);
+        self.mmu.ppu.tick(cycles);
+        self.mmu.tick(cycles);
+        self.mmu.handle_ppu_interrupts();
+    }
+
     pub(crate) fn process_instruction(&mut self) -> (bool, u32) {
+        puffin::profile_scope!("emulate cpu");
         if self.halted {
             if self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0 {
                 self.halted = false;
@@ -89,8 +97,8 @@ impl CPU {
             return (false, self.handle_interrupt());
         }
 
-        let instr = self.fetch_byte();
-        let cycles = match instr {
+        //let instr = self.fetch_byte();
+        let cycles = match self.registers.IR {
             0x00 => 1,
             0x01 => self.instr_LD_r16_n16(Reg::BC),
             0x02 => self.instr_LD_r16_A(Reg::BC),
@@ -338,7 +346,7 @@ impl CPU {
             0xFF => self.instr_RST(0x38),
             _ => panic!(
                 "Received invalid opcode: {:#04X}, PC={:#06X}",
-                instr, self.registers.PC
+                self.registers.IR, self.registers.PC
             ),
         };
 
@@ -348,11 +356,16 @@ impl CPU {
             self.registers.IME = true;
             self.to_set_IME = 0;
         }
-        (instr == 0x40, cycles)
+
+        self.registers.IR = self.fetch_byte() as u16;
+        self.tick_dot(4);
+
+        (self.registers.IR == 0x40, cycles)
     }
 
     fn process_CB_instruction(&mut self) -> u32 {
         let instr = self.fetch_byte();
+        self.tick_dot(4);
         match instr {
             0x00 => self.instr_RLC_r8(Reg::B),
             0x01 => self.instr_RLC_r8(Reg::C),
@@ -616,7 +629,9 @@ impl CPU {
 
     fn instr_LD_r16_n16(&mut self, register: Reg) -> u32 {
         let lower = self.fetch_byte();
+        self.tick_dot(4);
         let higher = self.fetch_byte();
+        self.tick_dot(4);
         let immediate = ((higher as u16) << 8) | (lower as u16);
 
         match register {
@@ -644,10 +659,12 @@ impl CPU {
         };
 
         self.mmu.write(address, self.registers.A);
+        self.tick_dot(4);
         2
     }
 
     fn instr_INC_r16(&mut self, register: Reg) -> u32 {
+        self.tick_dot(4);
         match register {
             Reg::AF => self.registers.set_AF(self.registers.AF().wrapping_add(1)),
             Reg::BC => self.registers.set_BC(self.registers.BC().wrapping_add(1)),
@@ -793,6 +810,7 @@ impl CPU {
 
     fn instr_LD_r8_n8(&mut self, register: Reg) -> u32 {
         let immediate = self.fetch_byte();
+        self.tick_dot(4);
         match register {
             Reg::A => {
                 self.registers.A = immediate;
@@ -838,10 +856,14 @@ impl CPU {
 
     fn instr_LD_n16_SP(&mut self) -> u32 {
         let address_lo = self.fetch_byte();
+        self.tick_dot(4);
         let address_hi = self.fetch_byte();
+        self.tick_dot(4);
         let address = ((address_hi as u16) << 8) | (address_lo as u16);
         self.mmu.write(address, (self.registers.SP & 0xFF) as u8);
+        self.tick_dot(4);
         self.mmu.write(address + 1, (self.registers.SP >> 8) as u8);
+        self.tick_dot(4);
         5
     }
 
@@ -854,6 +876,7 @@ impl CPU {
             Reg::SP => self.registers.SP,
             _ => panic!("instr_ADD_HL_r16 received invalid register: {:?}", register),
         };
+        self.tick_dot(4);
 
         self.registers.set_flag(
             Flag::HALF_CARRY,
@@ -876,12 +899,14 @@ impl CPU {
             _ => panic!("instr_LD_A_r16 received invalid register: {:?}", register),
         };
         let value = self.mmu.read(address);
+        self.tick_dot(4);
 
         self.registers.A = value;
         2
     }
 
     fn instr_DEC_r16(&mut self, register: Reg) -> u32 {
+        self.tick_dot(4);
         match register {
             Reg::AF => self.registers.set_AF(self.registers.AF().wrapping_sub(1)),
             Reg::BC => self.registers.set_BC(self.registers.BC().wrapping_sub(1)),
@@ -926,6 +951,8 @@ impl CPU {
 
     fn instr_JR_n16(&mut self) -> u32 {
         let offset = self.fetch_byte() as i8;
+        self.tick_dot(4);
+        self.tick_dot(4);
         if offset >= 0 {
             self.registers.PC = self.registers.PC.wrapping_add(offset as u16);
         } else {
@@ -950,12 +977,14 @@ impl CPU {
 
     fn instr_JR_cc_n16(&mut self, cc: ConditionCode) -> u32 {
         let offset = self.fetch_byte() as i8;
+        self.tick_dot(4);
 
         if (cc == ConditionCode::C && self.registers.has_flag(Flag::CARRY))
             || (cc == ConditionCode::NC && !self.registers.has_flag(Flag::CARRY))
             || (cc == ConditionCode::Z && self.registers.has_flag(Flag::ZERO))
             || (cc == ConditionCode::NZ && !self.registers.has_flag(Flag::ZERO))
         {
+            self.tick_dot(4);
             if offset >= 0 {
                 self.registers.PC = self.registers.PC.wrapping_add(offset as u16);
             } else {
@@ -971,6 +1000,7 @@ impl CPU {
         let address = self.registers.HL();
         let value = self.registers.A;
         self.mmu.write(address, value);
+        self.tick_dot(4);
         self.registers.set_HL(self.registers.HL() + 1);
         2
     }
@@ -979,6 +1009,7 @@ impl CPU {
         let address = self.registers.HL();
         let value = self.registers.A;
         self.mmu.write(address, value);
+        self.tick_dot(4);
         self.registers.set_HL(self.registers.HL() - 1);
         2
     }
@@ -1017,6 +1048,7 @@ impl CPU {
     fn instr_LD_A_HLI(&mut self) -> u32 {
         let address = self.registers.HL();
         self.registers.A = self.mmu.read(address);
+        self.tick_dot(4);
         self.registers.set_HL(self.registers.HL().wrapping_add(1));
         2
     }
@@ -1024,6 +1056,7 @@ impl CPU {
     fn instr_LD_A_HLD(&mut self) -> u32 {
         let address = self.registers.HL();
         self.registers.A = self.mmu.read(address);
+        self.tick_dot(4);
         self.registers.set_HL(self.registers.HL().wrapping_sub(1));
         2
     }
@@ -1038,8 +1071,10 @@ impl CPU {
     fn instr_INC_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let old_value = self.mmu.read(address);
+        self.tick_dot(4);
         let value = old_value.wrapping_add(1);
         self.mmu.write(address, value);
+        self.tick_dot(4);
         self.registers.set_flag(Flag::ZERO, value == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers
@@ -1050,8 +1085,10 @@ impl CPU {
     fn instr_DEC_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let old_value = self.mmu.read(address);
+        self.tick_dot(4);
         let value = old_value.wrapping_sub(1);
         self.mmu.write(address, value);
+        self.tick_dot(4);
         self.registers.set_flag(Flag::ZERO, value == 0);
         self.registers.set_flag(Flag::SUBTRACTION, true);
         self.registers
@@ -1062,7 +1099,9 @@ impl CPU {
     fn instr_LD_HL_n8(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.fetch_byte();
+        self.tick_dot(4);
         self.mmu.write(address, value);
+        self.tick_dot(4);
         3
     }
 
@@ -1116,6 +1155,7 @@ impl CPU {
     fn instr_LD_r8_HL(&mut self, register: Reg) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         match register {
             Reg::A => self.registers.A = value,
             Reg::B => self.registers.B = value,
@@ -1150,6 +1190,7 @@ impl CPU {
         };
         let address = self.registers.HL();
         self.mmu.write(address, value);
+        self.tick_dot(4);
         2
     }
 
@@ -1196,6 +1237,7 @@ impl CPU {
 
     fn instr_ADD_A_n8(&mut self) -> u32 {
         let value = self.fetch_byte();
+        self.tick_dot(4);
         let (new_value, overflowed) = self.registers.A.overflowing_add(value);
         self.registers.set_flag(
             Flag::HALF_CARRY,
@@ -1211,6 +1253,7 @@ impl CPU {
     fn instr_ADD_A_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         let (new_value, overflowed) = self.registers.A.overflowing_add(value);
         self.registers.set_flag(
             Flag::HALF_CARRY,
@@ -1258,6 +1301,7 @@ impl CPU {
 
     fn instr_ADC_A_n8(&mut self) -> u32 {
         let value = self.fetch_byte();
+        self.tick_dot(4);
         let (new_value_, overflowed_) = self.registers.A.overflowing_add(value);
         let (new_value, mut overflowed) =
             new_value_.overflowing_add(u8::from(self.registers.has_flag(Flag::CARRY)));
@@ -1279,6 +1323,7 @@ impl CPU {
     fn instr_ADC_A_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         let (new_value_, overflowed_) = self.registers.A.overflowing_add(value);
         let (new_value, mut overflowed) =
             new_value_.overflowing_add(u8::from(self.registers.has_flag(Flag::CARRY)));
@@ -1324,6 +1369,7 @@ impl CPU {
 
     fn instr_SUB_A_n8(&mut self) -> u32 {
         let value = self.fetch_byte();
+        self.tick_dot(4);
         let (new_value, overflowed) = self.registers.A.overflowing_sub(value);
         self.registers
             .set_flag(Flag::HALF_CARRY, (self.registers.A & 0xF) < (value & 0xF));
@@ -1337,6 +1383,7 @@ impl CPU {
     fn instr_SUB_A_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         let (new_value, overflowed) = self.registers.A.overflowing_sub(value);
         self.registers
             .set_flag(Flag::HALF_CARRY, (self.registers.A & 0xF) < (value & 0xF));
@@ -1380,6 +1427,7 @@ impl CPU {
 
     fn instr_SBC_A_n8(&mut self) -> u32 {
         let value = self.fetch_byte();
+        self.tick_dot(4);
         let (new_value_, overflowed_) = self.registers.A.overflowing_sub(value);
         let (new_value, mut overflowed) =
             new_value_.overflowing_sub(u8::from(self.registers.has_flag(Flag::CARRY)));
@@ -1399,6 +1447,7 @@ impl CPU {
     fn instr_SBC_A_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         let (new_value_, overflowed_) = self.registers.A.overflowing_sub(value);
         let (new_value, mut overflowed) =
             new_value_.overflowing_sub(u8::from(self.registers.has_flag(Flag::CARRY)));
@@ -1440,6 +1489,7 @@ impl CPU {
 
     fn instr_AND_A_n8(&mut self) -> u32 {
         let value = self.fetch_byte();
+        self.tick_dot(4);
         self.registers.A &= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1451,6 +1501,7 @@ impl CPU {
     fn instr_AND_A_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         self.registers.A &= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1484,6 +1535,7 @@ impl CPU {
 
     fn instr_XOR_A_n8(&mut self) -> u32 {
         let value = self.fetch_byte();
+        self.tick_dot(4);
         self.registers.A ^= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1495,6 +1547,7 @@ impl CPU {
     fn instr_XOR_A_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         self.registers.A ^= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1525,6 +1578,7 @@ impl CPU {
 
     fn instr_OR_A_n8(&mut self) -> u32 {
         let value = self.fetch_byte();
+        self.tick_dot(4);
         self.registers.A |= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1536,6 +1590,7 @@ impl CPU {
     fn instr_OR_A_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         self.registers.A |= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1567,6 +1622,7 @@ impl CPU {
 
     fn instr_CP_A_n8(&mut self) -> u32 {
         let value = self.fetch_byte();
+        self.tick_dot(4);
         let (new_value, overflowed) = self.registers.A.overflowing_sub(value);
         self.registers
             .set_flag(Flag::HALF_CARRY, (self.registers.A & 0xF) < (value & 0xF));
@@ -1579,6 +1635,7 @@ impl CPU {
     fn instr_CP_A_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
         let (new_value, overflowed) = self.registers.A.overflowing_sub(value);
         self.registers
             .set_flag(Flag::HALF_CARRY, (self.registers.A & 0xF) < (value & 0xF));
@@ -1589,14 +1646,18 @@ impl CPU {
     }
 
     fn instr_RET_cc(&mut self, cc: ConditionCode) -> u32 {
+        self.tick_dot(4);
         if (cc == ConditionCode::C && self.registers.has_flag(Flag::CARRY))
             || (cc == ConditionCode::NC && !self.registers.has_flag(Flag::CARRY))
             || (cc == ConditionCode::Z && self.registers.has_flag(Flag::ZERO))
             || (cc == ConditionCode::NZ && !self.registers.has_flag(Flag::ZERO))
         {
+            self.tick_dot(4);
             let value_lo = self.mmu.read(self.registers.SP);
             self.registers.SP = self.registers.SP.wrapping_add(1);
+            self.tick_dot(4);
             let value_hi = self.mmu.read(self.registers.SP);
+            self.tick_dot(4);
             self.registers.SP = self.registers.SP.wrapping_add(1);
             self.registers.PC = (value_hi as u16) << 8 | value_lo as u16;
             5
@@ -1608,8 +1669,10 @@ impl CPU {
     fn instr_POP_r16(&mut self, register: Reg) -> u32 {
         let value_lo = self.mmu.read(self.registers.SP);
         self.registers.SP = self.registers.SP.wrapping_add(1);
+        self.tick_dot(4);
         let value_hi = self.mmu.read(self.registers.SP);
         self.registers.SP = self.registers.SP.wrapping_add(1);
+        self.tick_dot(4);
         let value = (value_hi as u16) << 8 | value_lo as u16;
 
         match register {
@@ -1638,21 +1701,27 @@ impl CPU {
             }
         };
         self.registers.SP = self.registers.SP.wrapping_sub(1);
+        self.tick_dot(4);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
         self.registers.SP = self.registers.SP.wrapping_sub(1);
+        self.tick_dot(4);
         self.mmu.write(self.registers.SP, value as u8);
+        self.tick_dot(4);
         4
     }
 
     fn instr_JP_cc_a16(&mut self, cc: ConditionCode) -> u32 {
         let address_lo = self.fetch_byte();
+        self.tick_dot(4);
         let address_hi = self.fetch_byte();
+        self.tick_dot(4);
         let address = ((address_hi as u16) << 8) | address_lo as u16;
         if (cc == ConditionCode::C && self.registers.has_flag(Flag::CARRY))
             || (cc == ConditionCode::NC && !self.registers.has_flag(Flag::CARRY))
             || (cc == ConditionCode::Z && self.registers.has_flag(Flag::ZERO))
             || (cc == ConditionCode::NZ && !self.registers.has_flag(Flag::ZERO))
         {
+            self.tick_dot(4);
             self.registers.PC = address;
             4
         } else {
@@ -1662,9 +1731,12 @@ impl CPU {
 
     fn instr_JP_a16(&mut self) -> u32 {
         let address_lo = self.fetch_byte();
+        self.tick_dot(4);
         let address_hi = self.fetch_byte();
+        self.tick_dot(4);
         let address = (address_hi as u16) << 8 | address_lo as u16;
         self.registers.PC = address;
+        self.tick_dot(4);
         4
     }
 
@@ -1675,22 +1747,29 @@ impl CPU {
 
     fn instr_CALL_a16(&mut self) -> u32 {
         let address_lo = self.fetch_byte();
+        self.tick_dot(4);
         let address_hi = self.fetch_byte();
+        self.tick_dot(4);
         let address = (address_hi as u16) << 8 | address_lo as u16;
 
         let value = self.registers.PC;
         self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
+        self.tick_dot(4);
         self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, value as u8);
+        self.tick_dot(4);
 
+        self.tick_dot(4);
         self.registers.PC = address;
         6
     }
 
     fn instr_CALL_cc_a16(&mut self, cc: ConditionCode) -> u32 {
         let address_lo = self.fetch_byte();
+        self.tick_dot(4);
         let address_hi = self.fetch_byte();
+        self.tick_dot(4);
         let address = (address_hi as u16) << 8 | address_lo as u16;
         if (cc == ConditionCode::C && self.registers.has_flag(Flag::CARRY))
             || (cc == ConditionCode::NC && !self.registers.has_flag(Flag::CARRY))
@@ -1699,9 +1778,12 @@ impl CPU {
         {
             let value = self.registers.PC;
             self.registers.SP = self.registers.SP.wrapping_sub(1);
+            self.tick_dot(4);
             self.mmu.write(self.registers.SP, (value >> 8) as u8);
             self.registers.SP = self.registers.SP.wrapping_sub(1);
+            self.tick_dot(4);
             self.mmu.write(self.registers.SP, value as u8);
+            self.tick_dot(4);
             self.registers.PC = address;
             6
         } else {
@@ -1713,18 +1795,24 @@ impl CPU {
         let value = self.registers.PC;
         self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
+        self.tick_dot(4);
         self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, value as u8);
+        self.tick_dot(4);
 
         self.registers.PC = vec;
+        self.tick_dot(4);
         4
     }
 
     fn instr_RET(&mut self) -> u32 {
         let value_lo = self.mmu.read(self.registers.SP);
+        self.tick_dot(4);
         self.registers.SP = self.registers.SP.wrapping_add(1);
         let value_hi = self.mmu.read(self.registers.SP);
+        self.tick_dot(4);
         self.registers.SP = self.registers.SP.wrapping_add(1);
+        self.tick_dot(4);
         self.registers.PC = (value_hi as u16) << 8 | value_lo as u16;
         4
     }
@@ -1732,34 +1820,43 @@ impl CPU {
     fn instr_RETI(&mut self) -> u32 {
         self.to_set_IME = 2;
         let value_lo = self.mmu.read(self.registers.SP);
+        self.tick_dot(4);
         self.registers.SP = self.registers.SP.wrapping_add(1);
         let value_hi = self.mmu.read(self.registers.SP);
+        self.tick_dot(4);
         self.registers.SP = self.registers.SP.wrapping_add(1);
+        self.tick_dot(4);
         self.registers.PC = (value_hi as u16) << 8 | value_lo as u16;
         4
     }
 
     fn instr_LDH_A_n16(&mut self) -> u32 {
         let address = 0xFF00 + self.fetch_byte() as u16;
+        self.tick_dot(4);
         self.registers.A = self.mmu.read(address);
+        self.tick_dot(4);
         3
     }
 
     fn instr_LDH_A_C(&mut self) -> u32 {
         let address = 0xFF00 + self.registers.C as u16;
         self.registers.A = self.mmu.read(address);
+        self.tick_dot(4);
         2
     }
 
     fn instr_LDH_n16_A(&mut self) -> u32 {
         let address = 0xFF00 + self.fetch_byte() as u16;
+        self.tick_dot(4);
         self.mmu.write(address, self.registers.A);
+        self.tick_dot(4);
         3
     }
 
     fn instr_LDH_C_A(&mut self) -> u32 {
         let address = 0xFF00 + self.registers.C as u16;
         self.mmu.write(address, self.registers.A);
+        self.tick_dot(4);
         2
     }
 
@@ -1776,8 +1873,11 @@ impl CPU {
     // no clue: https://github.com/alexcrichton/jba/blob/rust/src/cpu/z80/imp.rs#L81
     fn instr_ADD_SP_e8(&mut self) -> u32 {
         let value = self.fetch_byte() as i8 as i16 as u16;
+        self.tick_dot(4);
         let res = self.registers.SP.wrapping_add(value);
         let tmp = value ^ res ^ self.registers.SP;
+        self.tick_dot(4);
+        self.tick_dot(4);
 
         self.registers.SP = res;
 
@@ -1792,8 +1892,11 @@ impl CPU {
     // no clue: https://github.com/alexcrichton/jba/blob/rust/src/cpu/z80/imp.rs#L65
     fn instr_LD_HL_SP_e8(&mut self) -> u32 {
         let value = self.fetch_byte() as i8 as i16 as u16;
+        self.tick_dot(4);
         let res = self.registers.SP.wrapping_add(value);
         let tmp = value ^ res ^ self.registers.SP;
+
+        self.tick_dot(4);
 
         self.registers.set_HL(res);
 
@@ -1805,23 +1908,30 @@ impl CPU {
     }
 
     fn instr_LD_SP_HL(&mut self) -> u32 {
+        self.tick_dot(4);
         self.registers.SP = self.registers.HL();
         2
     }
 
     fn instr_LD_n16_A(&mut self) -> u32 {
         let address_lo = self.fetch_byte();
+        self.tick_dot(4);
         let address_hi = self.fetch_byte();
+        self.tick_dot(4);
         let address = (address_hi as u16) << 8 | address_lo as u16;
         self.mmu.write(address, self.registers.A);
+        self.tick_dot(4);
         4
     }
 
     fn instr_LD_A_n16(&mut self) -> u32 {
         let address_lo = self.fetch_byte();
+        self.tick_dot(4);
         let address_hi = self.fetch_byte();
+        self.tick_dot(4);
         let address = (address_hi as u16) << 8 | address_lo as u16;
         self.registers.A = self.mmu.read(address);
+        self.tick_dot(4);
         4
     }
 
@@ -1862,6 +1972,7 @@ impl CPU {
     fn instr_RLC_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let mut value = self.mmu.read(address);
+        self.tick_dot(4);
 
         value = value.rotate_left(1);
         self.registers.set_flag(Flag::CARRY, (value & 0x1) == 0x1);
@@ -1870,6 +1981,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
 
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -1909,6 +2021,7 @@ impl CPU {
     fn instr_RRC_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let mut value = self.mmu.read(address);
+        self.tick_dot(4);
 
         value = value.rotate_right(1);
         self.registers.set_flag(Flag::CARRY, value & 0x80 == 0x80);
@@ -1917,6 +2030,7 @@ impl CPU {
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -1958,6 +2072,7 @@ impl CPU {
     fn instr_RL_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let mut value = self.mmu.read(address);
+        self.tick_dot(4);
 
         let new_carry = value & 0x80 == 0x80;
         value = (value << 1) | u8::from(self.registers.has_flag(Flag::CARRY));
@@ -1968,6 +2083,7 @@ impl CPU {
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -2009,6 +2125,7 @@ impl CPU {
     fn instr_RR_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let mut value = self.mmu.read(address);
+        self.tick_dot(4);
 
         let new_carry = value & 0x01 == 0x01;
         value = (value >> 1) | (u8::from(self.registers.has_flag(Flag::CARRY)) << 7);
@@ -2019,6 +2136,7 @@ impl CPU {
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -2060,6 +2178,7 @@ impl CPU {
     fn instr_SLA_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let mut value = self.mmu.read(address);
+        self.tick_dot(4);
 
         let new_carry = value & 0x80 == 0x80;
         value <<= 1;
@@ -2070,6 +2189,7 @@ impl CPU {
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -2117,6 +2237,7 @@ impl CPU {
     fn instr_SRA_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let mut value = self.mmu.read(address);
+        self.tick_dot(4);
 
         let sign = value & 0x80 == 0x80;
         let new_carry = value & 0x01 == 0x01;
@@ -2133,6 +2254,7 @@ impl CPU {
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -2173,6 +2295,7 @@ impl CPU {
     fn instr_SWAP_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let mut value = self.mmu.read(address);
+        self.tick_dot(4);
 
         value = value.rotate_right(4);
 
@@ -2182,6 +2305,7 @@ impl CPU {
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -2223,6 +2347,7 @@ impl CPU {
     fn instr_SRL_HL(&mut self) -> u32 {
         let address = self.registers.HL();
         let mut value = self.mmu.read(address);
+        self.tick_dot(4);
 
         let new_carry = value & 0x01 == 0x01;
         value >>= 1;
@@ -2233,6 +2358,7 @@ impl CPU {
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -2262,6 +2388,7 @@ impl CPU {
     fn instr_BIT_u3_HL(&mut self, bit: u8) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
+        self.tick_dot(4);
 
         self.registers
             .set_flag(Flag::ZERO, value & (0x1 << bit) != (0x1 << bit));
@@ -2288,7 +2415,9 @@ impl CPU {
     fn instr_RES_u3_HL(&mut self, bit: u8) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address) & !(0x1 << bit);
+        self.tick_dot(4);
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 
@@ -2310,7 +2439,9 @@ impl CPU {
     fn instr_SET_u3_HL(&mut self, bit: u8) -> u32 {
         let address = self.registers.HL();
         let value = self.mmu.read(address) | (0x1 << bit);
+        self.tick_dot(4);
         self.mmu.write(address, value);
+        self.tick_dot(4);
         4
     }
 }

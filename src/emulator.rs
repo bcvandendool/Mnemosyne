@@ -1,5 +1,5 @@
-use crate::gameboy::GameBoy;
 use crate::gameboy::registers::Registers;
+use crate::gameboy::GameBoy;
 use crate::ui::UIState;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread;
@@ -46,7 +46,9 @@ impl Emulator {
 
     fn run(&self) {
         let mut gameboy = GameBoy::new();
-        gameboy.load_rom("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc5/rom_512kb.gb");
+        gameboy.load_rom(
+            "../../tests/game-boy-test-roms/artifacts/blargg/mem_timing-2/rom_singles/03-modify_timing.gb",
+        );
         gameboy.skip_boot_rom();
 
         loop {
@@ -54,6 +56,7 @@ impl Emulator {
                 SyncMessage::FrameStart(state) => {
                     // Prep data for render thread
                     {
+                        puffin::profile_scope!("sync to render thread");
                         let mut writer = self.upload_buffer.write().unwrap();
                         let frame_buffer = gameboy.get_framebuffer();
                         for idx in 0..(160 * 144) {
@@ -72,14 +75,18 @@ impl Emulator {
                     }
 
                     // Send state synchronized message
-                    let emu_state = EmulatorState::new(
-                        gameboy.dump_registers(),
-                        gameboy.dump_ram(state.selected_memory),
-                    );
-                    self.tx.send(SyncMessage::StateSynchronized(emu_state)).ok();
+                    {
+                        puffin::profile_scope!("dump emu state");
+                        let emu_state = EmulatorState::new(
+                            gameboy.dump_registers(),
+                            gameboy.dump_ram(state.selected_memory),
+                        );
+                        self.tx.send(SyncMessage::StateSynchronized(emu_state)).ok();
+                    }
 
                     // Do stuff per frame while previous frame is being rendered
                     if state.emulator_running {
+                        puffin::profile_scope!("emulate");
                         // TODO: proper time handling
                         for _ in 0..1000 {
                             for _ in 0..4194304 / 1000 / 180 {
@@ -87,17 +94,20 @@ impl Emulator {
                             }
 
                             // Check inputs
-                            while let Ok(key_event) = self.rx_controls.try_recv() {
-                                if key_event.state == ElementState::Pressed {
-                                    gameboy.key_pressed(key_event.physical_key);
-                                } else {
-                                    gameboy.key_released(key_event.physical_key);
+                            {
+                                while let Ok(key_event) = self.rx_controls.try_recv() {
+                                    if key_event.state == ElementState::Pressed {
+                                        gameboy.key_pressed(key_event.physical_key);
+                                    } else {
+                                        gameboy.key_released(key_event.physical_key);
+                                    }
                                 }
                             }
                         }
                     }
 
                     if state.emulator_should_step {
+                        puffin::profile_scope!("emulate tick");
                         gameboy.tick();
                     }
                 }

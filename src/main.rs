@@ -7,8 +7,10 @@ mod vulkan_renderer;
 use crate::egui_renderer::EguiRenderer;
 use crate::emulator::{Emulator, SyncMessage};
 use crate::vulkan_renderer::VulkanRenderer;
+use flexi_logger::{Age, Cleanup, Criterion, FileSpec, LoggerHandle, Naming};
 use std::any::Any;
 use std::error::Error;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
@@ -25,17 +27,33 @@ struct App {
     rx_sync: Receiver<SyncMessage>,
     tx_sync: SyncSender<SyncMessage>,
     tx_controls: Sender<KeyEvent>,
+    logger_handle: LoggerHandle,
 }
 
 fn main() -> Result<(), impl Error> {
+    // Setup logging
+    let egui_logger = Box::new(egui_logger::builder().build());
+    let (flexi_logger, logger_handle) = flexi_logger::Logger::try_with_str("debug")
+        .expect("Failed to create flexi_logger")
+        .log_to_file(FileSpec::default().directory(PathBuf::from("./log")))
+        .rotate(
+            Criterion::Age(Age::Day),
+            Naming::Timestamps,
+            Cleanup::KeepLogFiles(7),
+        )
+        .build()
+        .expect("Failed to build flexi_logger");
+    multi_log::MultiLogger::init(vec![egui_logger, flexi_logger], log::Level::Debug)
+        .expect("Failed to init multi_logger");
+
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::new(&event_loop);
+    let mut app = App::new(&event_loop, logger_handle);
 
     event_loop.run_app(&mut app)
 }
 
 impl App {
-    fn new(event_loop: &EventLoop<()>) -> Self {
+    fn new(event_loop: &EventLoop<()>, logger_handle: LoggerHandle) -> Self {
         let renderer = VulkanRenderer::new(event_loop);
         let egui_renderer = EguiRenderer::new(
             &renderer.context,
@@ -62,6 +80,7 @@ impl App {
             rx_sync: rx_main,
             tx_sync: tx_main,
             tx_controls,
+            logger_handle,
         }
     }
 }
@@ -100,6 +119,7 @@ impl ApplicationHandler for App {
                 self.tx_sync
                     .send(SyncMessage::FrameStart(self.egui_renderer.ui_state.clone()))
                     .ok();
+                puffin::GlobalProfiler::lock().new_frame();
                 let emu_state = match self.rx_sync.recv().ok().unwrap() {
                     SyncMessage::StateSynchronized(emu_state) => emu_state,
                     _ => panic!("Unexpected message received on main thread"),

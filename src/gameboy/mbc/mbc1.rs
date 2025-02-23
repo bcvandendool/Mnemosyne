@@ -1,7 +1,9 @@
 use crate::gameboy::mbc::MBC;
 use intbits::Bits;
+use log::{log, Level};
 
 pub struct MBC1 {
+    name: String,
     rom: Vec<u8>,
     rom_size: usize,
     rom_banks: usize,
@@ -10,6 +12,7 @@ pub struct MBC1 {
     ram_banks: usize,
     has_ram: bool,
     has_battery: bool,
+    is_MBC1M: bool,
     // registers
     reg_ram_enabled: bool,
     reg_rom_bank_number: u8,
@@ -22,7 +25,12 @@ impl MBC for MBC1 {
         match address {
             0x0000..=0x3FFF => {
                 let mut mapped_address = if self.reg_banking_mode {
-                    ((self.reg_ram_bank_number as usize) << 19) | (address.bits(0..14) as usize)
+                    if self.is_MBC1M {
+                        ((self.reg_ram_bank_number.bits(0..2) as usize) << 18)
+                            | (address.bits(0..14) as usize)
+                    } else {
+                        ((self.reg_ram_bank_number as usize) << 19) | (address.bits(0..14) as usize)
+                    }
                 } else {
                     address.bits(0..14) as usize
                 };
@@ -30,9 +38,15 @@ impl MBC for MBC1 {
                 self.rom[mapped_address]
             }
             0x4000..=0x7FFF => {
-                let mut mapped_address = ((self.reg_ram_bank_number as usize) << 19)
-                    | ((self.reg_rom_bank_number.bits(0..5) as usize) << 14)
-                    | (address.bits(0..14) as usize);
+                let mut mapped_address = if self.is_MBC1M {
+                    ((self.reg_ram_bank_number.bits(0..2) as usize) << 18)
+                        | ((self.reg_rom_bank_number.bits(0..4) as usize) << 14)
+                        | (address.bits(0..14) as usize)
+                } else {
+                    ((self.reg_ram_bank_number as usize) << 19)
+                        | ((self.reg_rom_bank_number.bits(0..5) as usize) << 14)
+                        | (address.bits(0..14) as usize)
+                };
                 mapped_address &= (1 << (self.rom_banks.ilog2() + 14)) - 1;
                 self.rom[mapped_address]
             }
@@ -93,18 +107,49 @@ impl MBC for MBC1 {
             }
         }
     }
+    fn name(&self) -> String {
+        self.name.clone()
+    }
 }
 
 impl MBC1 {
     pub(crate) fn new(
+        name: String,
         rom: &[u8],
         rom_size: usize,
         has_ram: bool,
         ram_size: usize,
         has_battery: bool,
     ) -> Self {
-        // TODO: handle MBC1M cartridges
+        // Check if MBC1M type cartridge
+        let nintendo_logo = &rom[0x0104..=0x0133];
+        let mapped_address = (0x10 << 14) | (0x0104.bits(0..14) as usize);
+        if rom.len() > mapped_address + 0x2F {
+            let nintendo_logo_check = &rom[mapped_address..=mapped_address + 0x2F];
+            if nintendo_logo == nintendo_logo_check {
+                log!(Level::Info, "MBC1M type cartridge");
+                return MBC1 {
+                    name,
+                    rom: rom.to_vec(),
+                    rom_size,
+                    rom_banks: rom_size / 16384,
+                    ram: vec![0; ram_size],
+                    ram_size,
+                    ram_banks: ram_size / 8096,
+                    has_ram,
+                    has_battery,
+                    is_MBC1M: true,
+                    reg_ram_enabled: false,
+                    reg_rom_bank_number: 0x01,
+                    reg_ram_bank_number: 0x00,
+                    reg_banking_mode: false,
+                };
+            }
+        }
+
+        // Otherwise a normal MBC1 cartridge
         MBC1 {
+            name,
             rom: rom.to_vec(),
             rom_size,
             rom_banks: rom_size / 16384,
@@ -113,6 +158,7 @@ impl MBC1 {
             ram_banks: ram_size / 8096,
             has_ram,
             has_battery,
+            is_MBC1M: false,
             reg_ram_enabled: false,
             reg_rom_bank_number: 0x01,
             reg_ram_bank_number: 0x00,

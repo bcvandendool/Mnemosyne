@@ -167,6 +167,7 @@ impl PPU {
     }
 
     pub(crate) fn tick(&mut self, cycles: u32) {
+        puffin::profile_scope!("emulate ppu");
         for _ in 0..cycles {
             match self.ppu_mode {
                 PPUMode::HorizontalBlank => {

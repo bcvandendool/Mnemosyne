@@ -11,12 +11,19 @@ use syntect::highlighting::{FontStyle, ThemeSet};
 use syntect::parsing::{SyntaxSet, SyntaxSetBuilder};
 use winit::dpi::PhysicalSize;
 
+#[derive(Clone, PartialEq)]
+enum BottomPanels {
+    Logger,
+    Profiler,
+}
+
 #[derive(Clone)]
 pub struct UIState {
     pub(crate) emulator_running: bool,
     pub(crate) emulator_should_step: bool,
     breakpoints: HashSet<usize>,
     pub(crate) selected_memory: Memories,
+    bottom_panel: BottomPanels,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -49,7 +56,7 @@ impl UIContext {
         let ps = builder.build();
         let disassembler = Disassembler::new();
         let boot_rom = disassembler.disassemble_section(
-            &include_bytes!("../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc5/rom_512kb.gb")
+            &include_bytes!("../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/interrupts/ie_push.gb")
                 .to_vec(),
             0x00,
             0x7FFF,
@@ -72,6 +79,7 @@ impl UIState {
             emulator_should_step: false,
             breakpoints: HashSet::new(),
             selected_memory: Memories::WRAM1,
+            bottom_panel: BottomPanels::Logger,
         }
     }
 
@@ -97,8 +105,8 @@ pub(crate) fn create_ui(
     let mut gameboy_width = (size.width as f32 / 6.0) * 4.0;
     let mut gameboy_height = (gameboy_width / 10.0) * 9.0;
 
-    if gameboy_height > (size.height as f32 / 5.0) * 4.0 {
-        gameboy_height = (size.height as f32 / 5.0) * 4.0;
+    if gameboy_height > (size.height as f32 / 4.0) * 3.0 {
+        gameboy_height = (size.height as f32 / 4.0) * 3.0;
         gameboy_width = (gameboy_height / 9.0) * 10.0;
     }
     let gameboy_offset_x = (size.width as f32 / 2.0 - gameboy_width / 2.0) * 1.20;
@@ -181,7 +189,7 @@ pub(crate) fn create_ui(
                 if emu_state.ram.len() != 6144 {
                     // Data not loaded yet, skip
                 } else {
-                    // TODO: do not create images every frame, only on data recevied from emu
+                    // TODO: do not create images every frame, only on data received from emu
                     // and make sure that it actually changed, as the image creation is expensive
                     for j in 0..24 {
                         ui.horizontal(|ui| {
@@ -454,7 +462,35 @@ pub(crate) fn create_ui(
 
     egui::TopBottomPanel::bottom("bottom_panel")
         .exact_height(size.height as f32 - gameboy_height.round())
-        .show(egui_context, |ui| ui.label("Log output"));
+        .show(egui_context, |ui| {
+            ui.horizontal(|ui| {
+                let mut logger_button = ui.button("Logger");
+                if ui_state.bottom_panel == BottomPanels::Logger {
+                    logger_button = logger_button.highlight();
+                }
+                if logger_button.clicked() {
+                    ui_state.bottom_panel = BottomPanels::Logger;
+                    puffin::set_scopes_on(false);
+                }
+
+                let mut profiler_button = ui.button("Profiler");
+                if ui_state.bottom_panel == BottomPanels::Profiler {
+                    profiler_button = profiler_button.highlight();
+                }
+                if profiler_button.clicked() {
+                    ui_state.bottom_panel = BottomPanels::Profiler;
+                    puffin::set_scopes_on(true);
+                }
+            });
+
+            ui.separator();
+
+            if ui_state.bottom_panel == BottomPanels::Logger {
+                egui_logger::logger_ui().show_target(true).show(ui);
+            } else if ui_state.bottom_panel == BottomPanels::Profiler {
+                puffin_egui::profiler_ui(ui);
+            }
+        });
 }
 
 fn as_byte_range(whole: &str, range: &str) -> std::ops::Range<usize> {

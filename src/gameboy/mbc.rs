@@ -4,6 +4,8 @@ use crate::gameboy::mbc::mbc3::MBC3;
 use crate::gameboy::mbc::mbc5::MBC5;
 use crate::gameboy::mbc::null::NullMBC;
 use crate::gameboy::mbc::rom_only::ROMOnly;
+use log::{log, Level};
+use std::any::Any;
 
 mod mbc1;
 mod mbc2;
@@ -46,6 +48,7 @@ enum DestinationCode {
 pub trait MBC {
     fn read(&self, address: u16) -> u8;
     fn write(&mut self, address: u16, value: u8);
+    fn name(&self) -> String;
 }
 
 pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
@@ -54,9 +57,16 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
     }
 
     let header = parse_header(&rom);
-    match header.cartridge_type {
-        0x00 => Box::new(ROMOnly::new(&rom, false, header.ram_size, false)),
+    let mbc: Box<dyn MBC> = match header.cartridge_type {
+        0x00 => Box::new(ROMOnly::new(
+            String::from("ROM ONLY"),
+            &rom,
+            false,
+            header.ram_size,
+            false,
+        )),
         0x01 => Box::new(MBC1::new(
+            String::from("MBC1"),
             &rom,
             header.rom_size,
             false,
@@ -64,6 +74,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             false,
         )),
         0x02 => Box::new(MBC1::new(
+            String::from("MBC1+RAM"),
             &rom,
             header.rom_size,
             true,
@@ -71,17 +82,41 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             false,
         )),
         0x03 => Box::new(MBC1::new(
+            String::from("MBC1+RAM+BATTERY"),
             &rom,
             header.rom_size,
             true,
             header.ram_size,
             true,
         )),
-        0x05 => Box::new(MBC2::new(&rom, header.rom_size, false)),
-        0x06 => Box::new(MBC2::new(&rom, header.rom_size, true)),
-        0x08 => Box::new(ROMOnly::new(&rom, true, header.ram_size, false)),
-        0x09 => Box::new(ROMOnly::new(&rom, true, header.ram_size, true)),
+        0x05 => Box::new(MBC2::new(
+            String::from("MBC2"),
+            &rom,
+            header.rom_size,
+            false,
+        )),
+        0x06 => Box::new(MBC2::new(
+            String::from("MBC2+BATTERY"),
+            &rom,
+            header.rom_size,
+            true,
+        )),
+        0x08 => Box::new(ROMOnly::new(
+            String::from("ROM+RAM"),
+            &rom,
+            true,
+            header.ram_size,
+            false,
+        )),
+        0x09 => Box::new(ROMOnly::new(
+            String::from("ROM+RAM+BATTERY"),
+            &rom,
+            true,
+            header.ram_size,
+            true,
+        )),
         0x0F => Box::new(MBC3::new(
+            String::from("MBC3+TIMER+BATTERY"),
             &rom,
             header.rom_size,
             false,
@@ -90,6 +125,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             true,
         )),
         0x10 => Box::new(MBC3::new(
+            String::from("MBC3+TIMER+RAM+BATTERY"),
             &rom,
             header.rom_size,
             true,
@@ -98,6 +134,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             true,
         )),
         0x11 => Box::new(MBC3::new(
+            String::from("MBC3"),
             &rom,
             header.rom_size,
             false,
@@ -106,6 +143,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             false,
         )),
         0x12 => Box::new(MBC3::new(
+            String::from("MBC3+RAM"),
             &rom,
             header.rom_size,
             true,
@@ -114,6 +152,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             false,
         )),
         0x13 => Box::new(MBC3::new(
+            String::from("MBC3+RAM+BATTERY"),
             &rom,
             header.rom_size,
             true,
@@ -122,6 +161,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             false,
         )),
         0x19 => Box::new(MBC5::new(
+            String::from("MBC5"),
             &rom,
             header.rom_size,
             false,
@@ -130,6 +170,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             false,
         )),
         0x1A => Box::new(MBC5::new(
+            String::from("MBC5+RAM"),
             &rom,
             header.rom_size,
             true,
@@ -138,6 +179,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             false,
         )),
         0x1B => Box::new(MBC5::new(
+            String::from("MBC5+RAM+BATTERY"),
             &rom,
             header.rom_size,
             true,
@@ -146,6 +188,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             false,
         )),
         0x1C => Box::new(MBC5::new(
+            String::from("MBC5+RUMBLE"),
             &rom,
             header.rom_size,
             false,
@@ -154,6 +197,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             true,
         )),
         0x1D => Box::new(MBC5::new(
+            String::from("MBC5+RUMBLE+RAM"),
             &rom,
             header.rom_size,
             true,
@@ -162,6 +206,7 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             true,
         )),
         0x1E => Box::new(MBC5::new(
+            String::from("MBC5+RUMBLE+RAM+BATTERY"),
             &rom,
             header.rom_size,
             true,
@@ -170,7 +215,11 @@ pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {
             true,
         )),
         _ => panic!("Unknown cartridge type!"),
-    }
+    };
+
+    log!(Level::Info, "Loading rom: \"{}\"", header.title);
+    log!(Level::Info, "MBC Type: {}", mbc.name());
+    mbc
 }
 
 fn parse_rom_size(data: u8) -> usize {

@@ -1,5 +1,5 @@
 use crate::emulator::EmulatorState;
-use crate::ui::{UIContext, UIState, create_ui};
+use crate::ui::{create_ui, UIContext, UIState};
 use egui::ahash::AHashMap;
 use egui::epaint::{ImageDelta, Primitive};
 use egui::{ClippedPrimitive, Context, Rect, TextureId};
@@ -25,9 +25,8 @@ use vulkano::image::{
     Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceLayers, ImageType,
     ImageUsage,
 };
-use vulkano::memory::DeviceAlignment;
 use vulkano::memory::allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter};
-use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
+use vulkano::memory::DeviceAlignment;
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, BlendFactor, ColorBlendAttachmentState, ColorBlendState,
 };
@@ -37,6 +36,7 @@ use vulkano::pipeline::graphics::rasterization::RasterizationState;
 use vulkano::pipeline::graphics::subpass::PipelineRenderingCreateInfo;
 use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
 use vulkano::pipeline::graphics::viewport::{Scissor, Viewport, ViewportState};
+use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
     DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout,
@@ -609,6 +609,7 @@ impl EguiRenderer {
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         emu_state: EmulatorState,
     ) {
+        puffin::profile_scope!("Render UI");
         let rcx = self.rcx.as_mut().unwrap();
         let egui_winit_state = &mut rcx.egui_winit_state;
         let egui_context = &rcx.egui_context;

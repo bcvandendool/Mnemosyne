@@ -2,6 +2,7 @@ use crate::gameboy::mbc::MBC;
 use intbits::Bits;
 
 pub(crate) struct MBC5 {
+    name: String,
     rom: Vec<u8>,
     rom_size: usize,
     rom_banks: usize,
@@ -71,10 +72,15 @@ impl MBC for MBC5 {
             _ => {}
         }
     }
+
+    fn name(&self) -> String {
+        self.name.clone()
+    }
 }
 
 impl MBC5 {
     pub(crate) fn new(
+        name: String,
         rom: &[u8],
         rom_size: usize,
         has_ram: bool,
@@ -83,6 +89,7 @@ impl MBC5 {
         has_rumble: bool,
     ) -> Self {
         MBC5 {
+            name,
             rom: rom.to_vec(),
             rom_size,
             rom_banks: rom_size / 16384,

@@ -1,7 +1,6 @@
 use crate::egui_renderer::EguiRenderer;
 use crate::emulator::EmulatorState;
 use std::sync::Arc;
-use vulkano::DeviceSize;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
@@ -17,7 +16,6 @@ use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageCreateInfo, ImageType, ImageUsage};
 use vulkano::instance::InstanceCreateInfo;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState,
 };
@@ -28,6 +26,7 @@ use vulkano::pipeline::graphics::subpass::PipelineRenderingCreateInfo;
 use vulkano::pipeline::graphics::vertex_input::VertexInputState;
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::pipeline::graphics::viewport::ViewportState;
+use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
     DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout,
@@ -36,6 +35,7 @@ use vulkano::pipeline::{
 use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
 use vulkano::swapchain::{PresentMode, Surface};
 use vulkano::sync::GpuFuture;
+use vulkano::DeviceSize;
 use vulkano_util::context::{VulkanoConfig, VulkanoContext};
 use vulkano_util::window::{VulkanoWindows, WindowDescriptor};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -163,6 +163,7 @@ impl VulkanRenderer {
     }
 
     pub(crate) fn redraw(&mut self, renderer_egui: &mut EguiRenderer, emu_state: EmulatorState) {
+        puffin::profile_scope!("vulkan renderer");
         let window_size = self
             .windows
             .get_primary_renderer()
@@ -174,17 +175,18 @@ impl VulkanRenderer {
             return;
         }
 
-        let previous_frame_end =
-            self.windows
-                .get_primary_renderer_mut()
-                .unwrap()
-                .acquire(None, |_swapchain_images| {
+        let previous_frame_end;
+        {
+            puffin::profile_scope!("acquire swapchain");
+            previous_frame_end = self.windows.get_primary_renderer_mut().unwrap().acquire(
+                None,
+                |_swapchain_images| {
                     // Update viewport, either 2/3 of width or 2/3 of height max
                     let mut width = (window_size.width as f32 / 6.0) * 4.0;
                     let mut height = (width / 10.0) * 9.0;
 
-                    if height > (window_size.height as f32 / 5.0) * 4.0 {
-                        height = (window_size.height as f32 / 5.0) * 4.0;
+                    if height > (window_size.height as f32 / 4.0) * 3.0 {
+                        height = (window_size.height as f32 / 4.0) * 3.0;
                         width = (height / 9.0) * 10.0;
                     }
 
@@ -192,7 +194,9 @@ impl VulkanRenderer {
                     self.rcx.as_mut().unwrap().viewport.offset = [offset_x.round(), 0.0];
                     self.rcx.as_mut().unwrap().viewport.extent = [width.round(), height.round()];
                     renderer_egui.update_extent(window_size.into());
-                });
+                },
+            );
+        }
 
         // Create commandbuffer
         let mut builder = AutoCommandBufferBuilder::primary(

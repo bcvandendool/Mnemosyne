@@ -17,6 +17,8 @@ pub struct Registers {
     // Program Counter
     pub PC: u16,
     pub IME: bool,
+    // Instruction register
+    pub IR: u16,
 }
 
 #[derive(Debug)]
@@ -66,6 +68,7 @@ impl Registers {
             SP: 0,
             PC: 0,
             IME: false,
+            IR: 0x00,
         }
     }
 

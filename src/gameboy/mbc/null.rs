@@ -10,6 +10,10 @@ impl MBC for NullMBC {
     fn write(&mut self, address: u16, value: u8) {
         panic!()
     }
+
+    fn name(&self) -> String {
+        String::from("NULL")
+    }
 }
 
 impl NullMBC {

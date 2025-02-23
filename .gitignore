@@ -1,2 +1,3 @@
 /target
 src/roms/**
+log/*.log

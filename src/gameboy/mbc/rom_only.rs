@@ -1,6 +1,7 @@
 use crate::gameboy::mbc::MBC;
 
 pub struct ROMOnly {
+    name: String,
     rom: Vec<u8>,
     ram: Vec<u8>,
     has_ram: bool,
@@ -30,7 +31,7 @@ impl MBC for ROMOnly {
                 if self.has_ram {
                     self.ram[(address - 0xA000) as usize] = value;
                 } else {
-                    panic!("Tried to read cartridge ROM which does not exist for this cartridge!")
+                    panic!("Tried to read cartridge RAM which does not exist for this cartridge!")
                 }
             }
             _ => {
@@ -41,11 +42,22 @@ impl MBC for ROMOnly {
             }
         }
     }
+
+    fn name(&self) -> String {
+        self.name.clone()
+    }
 }
 
 impl ROMOnly {
-    pub fn new(rom: &[u8], has_ram: bool, ram_size: usize, has_battery: bool) -> Self {
+    pub fn new(
+        name: String,
+        rom: &[u8],
+        has_ram: bool,
+        ram_size: usize,
+        has_battery: bool,
+    ) -> Self {
         ROMOnly {
+            name,
             rom: rom.to_vec(),
             ram: vec![0; ram_size],
             has_ram,
