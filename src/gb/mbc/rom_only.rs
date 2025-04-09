@@ -1,4 +1,4 @@
-use crate::gameboy::mbc::MBC;
+use crate::gb::mbc::MBC;
 
 pub struct ROMOnly {
     name: String,
@@ -31,7 +31,7 @@ impl MBC for ROMOnly {
                 if self.has_ram {
                     self.ram[(address - 0xA000) as usize] = value;
                 } else {
-                    panic!("Tried to read cartridge RAM which does not exist for this cartridge!")
+                    println!("Tried to read cartridge RAM which does not exist for this cartridge!")
                 }
             }
             _ => {
@@ -46,6 +46,10 @@ impl MBC for ROMOnly {
     fn name(&self) -> String {
         self.name.clone()
     }
+
+    fn save_ram(&self) {}
+
+    fn load_ram(&mut self) {}
 }
 
 impl ROMOnly {

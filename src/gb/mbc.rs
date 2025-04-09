@@ -1,11 +1,12 @@
-use crate::gameboy::mbc::mbc1::MBC1;
-use crate::gameboy::mbc::mbc2::MBC2;
-use crate::gameboy::mbc::mbc3::MBC3;
-use crate::gameboy::mbc::mbc5::MBC5;
-use crate::gameboy::mbc::null::NullMBC;
-use crate::gameboy::mbc::rom_only::ROMOnly;
+use crate::gb::mbc::mbc1::MBC1;
+use crate::gb::mbc::mbc2::MBC2;
+use crate::gb::mbc::mbc3::MBC3;
+use crate::gb::mbc::mbc5::MBC5;
+use crate::gb::mbc::null::NullMBC;
+use crate::gb::mbc::rom_only::ROMOnly;
 use log::{log, Level};
 use std::any::Any;
+use std::path::Path;
 
 mod mbc1;
 mod mbc2;
@@ -49,6 +50,8 @@ pub trait MBC {
     fn read(&self, address: u16) -> u8;
     fn write(&mut self, address: u16, value: u8);
     fn name(&self) -> String;
+    fn save_ram(&self);
+    fn load_ram(&mut self);
 }
 
 pub fn create_MBC(rom: Vec<u8>) -> Box<dyn MBC> {

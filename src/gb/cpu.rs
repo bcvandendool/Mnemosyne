@@ -1,12 +1,20 @@
 #![allow(non_snake_case)]
-use crate::gameboy::mmu::MMU;
-use crate::gameboy::registers::{ConditionCode, Flag, Reg, Registers};
+
+use crate::gb::breakpoints::Breakpoints;
+use crate::gb::mmu::MMU;
+use crate::gb::registers::{ConditionCode, Flag, Reg, Registers};
+use log::{log, Level};
+use std::time::Duration;
 
 pub struct CPU {
     pub(crate) registers: Registers,
     pub(crate) mmu: MMU,
     to_set_IME: u8,
     halted: bool,
+    halt_bug: bool,
+    pub breakpoints: Breakpoints,
+    pub(crate) time_ppu: Duration,
+    pub(crate) time_io: Duration,
 }
 
 impl CPU {
@@ -16,88 +24,105 @@ impl CPU {
             mmu,
             to_set_IME: 0,
             halted: false,
+            halt_bug: false,
+            breakpoints: Breakpoints::new(),
+            time_ppu: Duration::new(0, 0),
+            time_io: Duration::new(0, 0),
         }
     }
 
     fn fetch_byte(&mut self) -> u8 {
         let value = self.mmu.read(self.registers.PC);
-        self.registers.PC = self.registers.PC.wrapping_add(1);
+        if self.halt_bug {
+            self.halt_bug = false;
+        } else {
+            self.registers.PC = self.registers.PC.wrapping_add(1);
+        }
         value
     }
 
     fn handle_interrupt(&mut self) -> u32 {
+        self.tick_dot(4);
+        self.tick_dot(4);
+
+        let value = self.registers.PC;
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
+        self.mmu.write(self.registers.SP, (value >> 8) as u8);
+        self.tick_dot(4);
+        self.registers.SP = self.registers.SP.wrapping_sub(1);
+        self.mmu.write(self.registers.SP, value as u8);
+
         // Reset IME
         self.registers.IME = false;
         let IE = self.mmu.read(0xFFFF);
         let IF = self.mmu.read(0xFF0F);
         let mut address = 0x00;
 
-        // Check VBlank
         if IF & 0b1 > 0 && IE & 0b1 > 0 {
+            // Check VBlank
             self.mmu.write(0xFF0F, IF & !0b1);
             address = 0x40;
-        }
-
-        // Check LCD
-        if IF & 0b10 > 0 && IE & 0b10 > 0 {
+        } else if IF & 0b10 > 0 && IE & 0b10 > 0 {
+            // Check LCD
             self.mmu.write(0xFF0F, IF & !0b10);
             address = 0x48;
-        }
-
-        // Check Timer
-        if IF & 0b100 > 0 && IE & 0b100 > 0 {
+        } else if IF & 0b100 > 0 && IE & 0b100 > 0 {
+            // Check Timer
             self.mmu.write(0xFF0F, IF & !0b100);
             address = 0x50;
-        }
-
-        // Check Serial
-        if IF & 0b1000 > 0 && IE & 0b1000 > 0 {
+        } else if IF & 0b1000 > 0 && IE & 0b1000 > 0 {
+            // Check Serial
             self.mmu.write(0xFF0F, IF & !0b1000);
             address = 0x58;
-        }
-
-        // Check Joypad
-        if IF & 0b10000 > 0 && IE & 0b10000 > 0 {
+        } else if IF & 0b10000 > 0 && IE & 0b10000 > 0 {
+            // Check Joypad
             self.mmu.write(0xFF0F, IF & !0b10000);
             address = 0x60;
         }
-
-        let value = self.registers.PC;
-        self.registers.SP = self.registers.SP.wrapping_sub(1);
-        self.mmu.write(self.registers.SP, (value >> 8) as u8);
-        self.registers.SP = self.registers.SP.wrapping_sub(1);
-        self.mmu.write(self.registers.SP, value as u8);
-
         self.registers.PC = address;
+        self.tick_dot(4);
+        self.tick_dot(4);
 
         5
     }
 
     fn tick_dot(&mut self, cycles: u32) {
-        self.mmu.io_registers.update_timers(cycles);
-        self.mmu.ppu.tick(cycles);
-        self.mmu.tick(cycles);
-        self.mmu.handle_ppu_interrupts();
+        let mut start = fastant::Instant::now();
+        for _ in 0..cycles {
+            self.mmu.ppu.tick();
+        }
+        self.time_ppu += start.elapsed();
+
+        start = fastant::Instant::now();
+        for _ in 0..cycles {
+            let DIV_APU = self.mmu.io_registers.update_timers();
+            self.mmu.tick();
+            self.mmu.handle_ppu_interrupts();
+            self.mmu.apu.tick(DIV_APU);
+        }
+        self.time_io += start.elapsed();
     }
 
     pub(crate) fn process_instruction(&mut self) -> (bool, u32) {
-        puffin::profile_scope!("emulate cpu");
         if self.halted {
-            if self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0 {
+            if self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) & 0x1F > 0 {
                 self.halted = false;
                 if self.registers.IME {
                     return (false, self.handle_interrupt());
                 }
             } else {
+                self.tick_dot(4);
                 return (false, 1);
             }
         }
 
-        if self.registers.IME && (self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0) {
+        if self.registers.IME && (self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) & 0x1F > 0) {
             return (false, self.handle_interrupt());
         }
 
-        //let instr = self.fetch_byte();
+        self.registers.IR = self.fetch_byte() as u16;
+        self.tick_dot(4);
+
         let cycles = match self.registers.IR {
             0x00 => 1,
             0x01 => self.instr_LD_r16_n16(Reg::BC),
@@ -350,17 +375,23 @@ impl CPU {
             ),
         };
 
-        if self.to_set_IME == 1 {
-            self.to_set_IME += 1;
-        } else if self.to_set_IME == 2 {
-            self.registers.IME = true;
-            self.to_set_IME = 0;
+        let mut hit_breakpoint: bool = false;
+        if self.breakpoints.breakpoints.contains(&self.registers.PC) {
+            hit_breakpoint = true;
         }
 
-        self.registers.IR = self.fetch_byte() as u16;
-        self.tick_dot(4);
+        if self.registers.IR == 0x40 {
+            hit_breakpoint = true;
+        }
 
-        (self.registers.IR == 0x40, cycles)
+        if self.to_set_IME == 1 {
+            self.to_set_IME = 2;
+        } else if self.to_set_IME == 2 {
+            self.to_set_IME = 0;
+            self.registers.IME = true;
+        }
+
+        (hit_breakpoint, cycles)
     }
 
     fn process_CB_instruction(&mut self) -> u32 {
@@ -627,6 +658,90 @@ impl CPU {
         }
     }
 
+    fn get_r8(&self, register: Reg) -> u8 {
+        match register {
+            Reg::A => self.registers.A,
+            Reg::B => self.registers.B,
+            Reg::C => self.registers.C,
+            Reg::D => self.registers.D,
+            Reg::E => self.registers.E,
+            Reg::F => self.registers.F,
+            Reg::H => self.registers.H,
+            Reg::L => self.registers.L,
+            _ => {
+                panic!("get_r8 received invalid register: {:?}", register)
+            }
+        }
+    }
+
+    fn set_r8(&mut self, register: Reg, value: u8) {
+        match register {
+            Reg::A => {
+                self.registers.A = value;
+            }
+            Reg::B => {
+                self.registers.B = value;
+            }
+            Reg::C => {
+                self.registers.C = value;
+            }
+            Reg::D => {
+                self.registers.D = value;
+            }
+            Reg::E => {
+                self.registers.E = value;
+            }
+            Reg::F => {
+                self.registers.F = value;
+            }
+            Reg::H => {
+                self.registers.H = value;
+            }
+            Reg::L => {
+                self.registers.L = value;
+            }
+            _ => {
+                panic!("set_r8 received invalid register: {:?}", register)
+            }
+        }
+    }
+
+    fn get_r16(&self, register: Reg) -> u16 {
+        match register {
+            Reg::AF => self.registers.AF(),
+            Reg::BC => self.registers.BC(),
+            Reg::DE => self.registers.DE(),
+            Reg::HL => self.registers.HL(),
+            Reg::SP => self.registers.SP,
+            _ => {
+                log!(
+                    Level::Error,
+                    "get_r16 received invalid register: {:?}",
+                    register
+                );
+                panic!()
+                // TODO: handle error better
+            }
+        }
+    }
+
+    fn set_r16(&mut self, register: Reg, value: u16) {
+        match register {
+            Reg::AF => self.registers.set_AF(value),
+            Reg::BC => self.registers.set_BC(value),
+            Reg::DE => self.registers.set_DE(value),
+            Reg::HL => self.registers.set_HL(value),
+            Reg::SP => self.registers.SP = value,
+            _ => {
+                log!(
+                    Level::Error,
+                    "get_r16 received invalid register: {:?}",
+                    register
+                )
+            }
+        }
+    }
+
     fn instr_LD_r16_n16(&mut self, register: Reg) -> u32 {
         let lower = self.fetch_byte();
         self.tick_dot(4);
@@ -634,29 +749,12 @@ impl CPU {
         self.tick_dot(4);
         let immediate = ((higher as u16) << 8) | (lower as u16);
 
-        match register {
-            Reg::AF => self.registers.set_AF(immediate),
-            Reg::BC => self.registers.set_BC(immediate),
-            Reg::DE => self.registers.set_DE(immediate),
-            Reg::HL => self.registers.set_HL(immediate),
-            Reg::SP => self.registers.SP = immediate,
-            _ => {
-                panic!("instr_LD_r16_n16 received invalid register: {:?}", register)
-            }
-        }
+        self.set_r16(register, immediate);
         3
     }
 
     fn instr_LD_r16_A(&mut self, register: Reg) -> u32 {
-        let address = match register {
-            Reg::AF => self.registers.AF(),
-            Reg::BC => self.registers.BC(),
-            Reg::DE => self.registers.DE(),
-            Reg::HL => self.registers.HL(),
-            _ => {
-                panic!("instr_LD_r16_A received invalid register: {:?}", register)
-            }
-        };
+        let address = self.get_r16(register);
 
         self.mmu.write(address, self.registers.A);
         self.tick_dot(4);
@@ -811,35 +909,7 @@ impl CPU {
     fn instr_LD_r8_n8(&mut self, register: Reg) -> u32 {
         let immediate = self.fetch_byte();
         self.tick_dot(4);
-        match register {
-            Reg::A => {
-                self.registers.A = immediate;
-            }
-            Reg::B => {
-                self.registers.B = immediate;
-            }
-            Reg::C => {
-                self.registers.C = immediate;
-            }
-            Reg::D => {
-                self.registers.D = immediate;
-            }
-            Reg::E => {
-                self.registers.E = immediate;
-            }
-            Reg::F => {
-                self.registers.F = immediate;
-            }
-            Reg::H => {
-                self.registers.H = immediate;
-            }
-            Reg::L => {
-                self.registers.L = immediate;
-            }
-            _ => {
-                panic!("instr_LD_r8_n8 received invalid register: {:?}", register)
-            }
-        }
+        self.set_r8(register, immediate);
         2
     }
 
@@ -868,14 +938,7 @@ impl CPU {
     }
 
     fn instr_ADD_HL_r16(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::AF => self.registers.AF(),
-            Reg::BC => self.registers.BC(),
-            Reg::DE => self.registers.DE(),
-            Reg::HL => self.registers.HL(),
-            Reg::SP => self.registers.SP,
-            _ => panic!("instr_ADD_HL_r16 received invalid register: {:?}", register),
-        };
+        let value = self.get_r16(register);
         self.tick_dot(4);
 
         self.registers.set_flag(
@@ -891,13 +954,7 @@ impl CPU {
     }
 
     fn instr_LD_A_r16(&mut self, register: Reg) -> u32 {
-        let address = match register {
-            Reg::AF => self.registers.AF(),
-            Reg::BC => self.registers.BC(),
-            Reg::DE => self.registers.DE(),
-            Reg::HL => self.registers.HL(),
-            _ => panic!("instr_LD_A_r16 received invalid register: {:?}", register),
-        };
+        let address = self.get_r16(register);
         let value = self.mmu.read(address);
         self.tick_dot(4);
 
@@ -1121,34 +1178,8 @@ impl CPU {
     }
 
     fn instr_LD_r8_r8(&mut self, register_a: Reg, register_b: Reg) -> u32 {
-        let value = match register_b {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_LD_r8_r8 received an invalid register_b: {:?}",
-                register_b
-            ),
-        };
-        match register_a {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!(
-                "instr_LD_r8_r8 received an invalid register_a: {:?}",
-                register_a
-            ),
-        }
+        let value = self.get_r8(register_b);
+        self.set_r8(register_a, value);
         1
     }
 
@@ -1156,38 +1187,12 @@ impl CPU {
         let address = self.registers.HL();
         let value = self.mmu.read(address);
         self.tick_dot(4);
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!(
-                "instr_LD_r8_HL received an invalid register: {:?}",
-                register
-            ),
-        }
+        self.set_r8(register, value);
         2
     }
 
     fn instr_LD_HL_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_LD_HL_r8 received an invalid register: {:?}",
-                register
-            ),
-        };
+        let value = self.get_r8(register);
         let address = self.registers.HL();
         self.mmu.write(address, value);
         self.tick_dot(4);
@@ -1197,10 +1202,8 @@ impl CPU {
     fn instr_HALT(&mut self) -> u32 {
         if self.registers.IME {
             self.halted = true;
-        } else if self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) > 0 {
-            // Halt bug
-            // TODO: check if this is correct
-            self.registers.PC -= 1;
+        } else if self.mmu.read(0xFFFF) & self.mmu.read(0xFF0F) & 0x1F > 0 {
+            self.halt_bug = true;
         } else {
             self.halted = true;
         }
@@ -1209,20 +1212,7 @@ impl CPU {
     }
 
     fn instr_ADD_A_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_ADD_A_r8 received an invalid register: {:?}",
-                register
-            ),
-        };
+        let value = self.get_r8(register);
         self.registers.set_flag(
             Flag::HALF_CARRY,
             (self.registers.A & 0xF) + (value & 0xF) > 0xF,
@@ -1267,20 +1257,7 @@ impl CPU {
     }
 
     fn instr_ADC_A_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_ADC_A_r8 received an invalid register: {:?}",
-                register
-            ),
-        };
+        let value = self.get_r8(register);
         let (new_value_, overflowed_) = self.registers.A.overflowing_add(value);
         let (new_value, mut overflowed) =
             new_value_.overflowing_add(u8::from(self.registers.has_flag(Flag::CARRY)));
@@ -1343,20 +1320,7 @@ impl CPU {
     }
 
     fn instr_SUB_A_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_SUB_A_r8 received an invalid register: {:?}",
-                register
-            ),
-        };
+        let value = self.get_r8(register);
         let (new_value, overflowed) = self.registers.A.overflowing_sub(value);
         self.registers
             .set_flag(Flag::HALF_CARRY, (self.registers.A & 0xF) < (value & 0xF));
@@ -1395,20 +1359,7 @@ impl CPU {
     }
 
     fn instr_SBC_A_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_SBC_A_r8 received an invalid register: {:?}",
-                register
-            ),
-        };
+        let value = self.get_r8(register);
         let (new_value_, overflowed_) = self.registers.A.overflowing_sub(value);
         let (new_value, mut overflowed) =
             new_value_.overflowing_sub(u8::from(self.registers.has_flag(Flag::CARRY)));
@@ -1465,20 +1416,7 @@ impl CPU {
     }
 
     fn instr_AND_A_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_AND_A_r8 received an invalid register: {:?}",
-                register
-            ),
-        };
+        let value = self.get_r8(register);
         self.registers.A &= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1511,20 +1449,7 @@ impl CPU {
     }
 
     fn instr_XOR_A_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_XOR_A_r8 received an invalid register: {:?}",
-                register
-            ),
-        };
+        let value = self.get_r8(register);
         self.registers.A ^= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1557,17 +1482,7 @@ impl CPU {
     }
 
     fn instr_OR_A_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_OR_A_r8 received an invalid register: {:?}", register),
-        };
+        let value = self.get_r8(register);
         self.registers.A |= value;
         self.registers.set_flag(Flag::ZERO, self.registers.A == 0);
         self.registers.set_flag(Flag::SUBTRACTION, false);
@@ -1600,17 +1515,7 @@ impl CPU {
     }
 
     fn instr_CP_A_r8(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_CP_A_r8 received an invalid register: {:?}", register),
-        };
+        let value = self.get_r8(register);
         let (new_value, overflowed) = self.registers.A.overflowing_sub(value);
         self.registers
             .set_flag(Flag::HALF_CARRY, (self.registers.A & 0xF) < (value & 0xF));
@@ -1690,16 +1595,7 @@ impl CPU {
     }
 
     fn instr_PUSH_r16(&mut self, register: Reg) -> u32 {
-        let value = match register {
-            Reg::AF => self.registers.AF(),
-            Reg::BC => self.registers.BC(),
-            Reg::DE => self.registers.DE(),
-            Reg::HL => self.registers.HL(),
-            Reg::SP => self.registers.SP,
-            _ => {
-                panic!("instr_PUSH_r16 received invalid register: {:?}", register)
-            }
-        };
+        let value = self.get_r16(register);
         self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.tick_dot(4);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
@@ -1752,6 +1648,8 @@ impl CPU {
         self.tick_dot(4);
         let address = (address_hi as u16) << 8 | address_lo as u16;
 
+        self.tick_dot(4);
+
         let value = self.registers.PC;
         self.registers.SP = self.registers.SP.wrapping_sub(1);
         self.mmu.write(self.registers.SP, (value >> 8) as u8);
@@ -1760,7 +1658,6 @@ impl CPU {
         self.mmu.write(self.registers.SP, value as u8);
         self.tick_dot(4);
 
-        self.tick_dot(4);
         self.registers.PC = address;
         6
     }
@@ -1818,7 +1715,6 @@ impl CPU {
     }
 
     fn instr_RETI(&mut self) -> u32 {
-        self.to_set_IME = 2;
         let value_lo = self.mmu.read(self.registers.SP);
         self.tick_dot(4);
         self.registers.SP = self.registers.SP.wrapping_add(1);
@@ -1827,6 +1723,7 @@ impl CPU {
         self.registers.SP = self.registers.SP.wrapping_add(1);
         self.tick_dot(4);
         self.registers.PC = (value_hi as u16) << 8 | value_lo as u16;
+        self.registers.IME = true;
         4
     }
 
@@ -1862,6 +1759,7 @@ impl CPU {
 
     fn instr_DI(&mut self) -> u32 {
         self.registers.IME = false;
+        self.to_set_IME = 0;
         1
     }
 
@@ -1937,17 +1835,7 @@ impl CPU {
 
     // CB instructions
     fn instr_RLC_r8(&mut self, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_RLC_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
 
         value = value.rotate_left(1);
         self.registers.set_flag(Flag::CARRY, (value & 0x1) == 0x1);
@@ -1955,17 +1843,7 @@ impl CPU {
         self.registers.set_flag(Flag::HALF_CARRY, false);
         self.registers.set_flag(Flag::SUBTRACTION, false);
 
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!("instr_RLC_r8 received an invalid register: {:?}", register),
-        };
+        self.set_r8(register, value);
         2
     }
 
@@ -1986,17 +1864,7 @@ impl CPU {
     }
 
     fn instr_RRC_r8(&mut self, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_RLC_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
 
         value = value.rotate_right(1);
         self.registers.set_flag(Flag::CARRY, value & 0x80 == 0x80);
@@ -2004,17 +1872,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!("instr_RLC_r8 received an invalid register: {:?}", register),
-        };
+        self.set_r8(register, value);
         2
     }
 
@@ -2035,17 +1893,7 @@ impl CPU {
     }
 
     fn instr_RL_r8(&mut self, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_RL_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
 
         let new_carry = value & 0x80 == 0x80;
         value = (value << 1) | u8::from(self.registers.has_flag(Flag::CARRY));
@@ -2055,17 +1903,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!("instr_RL_r8 received an invalid register: {:?}", register),
-        };
+        self.set_r8(register, value);
         2
     }
 
@@ -2088,17 +1926,7 @@ impl CPU {
     }
 
     fn instr_RR_r8(&mut self, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_RR_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
 
         let new_carry = value & 0x01 == 0x01;
         value = (value >> 1) | (u8::from(self.registers.has_flag(Flag::CARRY)) << 7);
@@ -2108,17 +1936,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!("instr_RR_r8 received an invalid register: {:?}", register),
-        };
+        self.set_r8(register, value);
         2
     }
 
@@ -2141,17 +1959,7 @@ impl CPU {
     }
 
     fn instr_SLA_r8(&mut self, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_SLA_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
 
         let new_carry = value & 0x80 == 0x80;
         value <<= 1;
@@ -2161,17 +1969,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!("instr_SLA_r8 received an invalid register: {:?}", register),
-        };
+        self.set_r8(register, value);
         2
     }
 
@@ -2194,17 +1992,7 @@ impl CPU {
     }
 
     fn instr_SRA_r8(&mut self, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_SRA_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
 
         let sign = value & 0x80 == 0x80;
         let new_carry = value & 0x01 == 0x01;
@@ -2220,17 +2008,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!("instr_SRA_r8 received an invalid register: {:?}", register),
-        };
+        self.set_r8(register, value);
         2
     }
 
@@ -2259,17 +2037,7 @@ impl CPU {
     }
 
     fn instr_SWAP_r8(&mut self, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_SWAP_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
 
         let value = value.rotate_right(4);
 
@@ -2278,17 +2046,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!("instr_SWAP_r8 received an invalid register: {:?}", register),
-        };
+        self.set_r8(register, value);
         2
     }
 
@@ -2310,17 +2068,7 @@ impl CPU {
     }
 
     fn instr_SRL_r8(&mut self, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!("instr_SRL_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
 
         let new_carry = value & 0x01 == 0x01;
         value >>= 1;
@@ -2330,17 +2078,7 @@ impl CPU {
         self.registers.set_flag(Flag::SUBTRACTION, false);
         self.registers.set_flag(Flag::HALF_CARRY, false);
 
-        match register {
-            Reg::A => self.registers.A = value,
-            Reg::B => self.registers.B = value,
-            Reg::C => self.registers.C = value,
-            Reg::D => self.registers.D = value,
-            Reg::E => self.registers.E = value,
-            Reg::F => self.registers.F = value,
-            Reg::H => self.registers.H = value,
-            Reg::L => self.registers.L = value,
-            _ => panic!("instr_SRL_r8 received an invalid register: {:?}", register),
-        };
+        self.set_r8(register, value);
         2
     }
 
@@ -2363,20 +2101,7 @@ impl CPU {
     }
 
     fn instr_BIT_u3_r8(&mut self, bit: u8, register: Reg) -> u32 {
-        let mut value = match register {
-            Reg::A => self.registers.A,
-            Reg::B => self.registers.B,
-            Reg::C => self.registers.C,
-            Reg::D => self.registers.D,
-            Reg::E => self.registers.E,
-            Reg::F => self.registers.F,
-            Reg::H => self.registers.H,
-            Reg::L => self.registers.L,
-            _ => panic!(
-                "instr_BIT_u3_r8 received an invalid register: {:?}",
-                register
-            ),
-        };
+        let value = self.get_r8(register);
 
         self.registers
             .set_flag(Flag::ZERO, value & (0x1 << bit) != (0x1 << bit));
@@ -2398,17 +2123,9 @@ impl CPU {
     }
 
     fn instr_RES_u3_r8(&mut self, bit: u8, register: Reg) -> u32 {
-        match register {
-            Reg::A => self.registers.A &= !(0x1 << bit),
-            Reg::B => self.registers.B &= !(0x1 << bit),
-            Reg::C => self.registers.C &= !(0x1 << bit),
-            Reg::D => self.registers.D &= !(0x1 << bit),
-            Reg::E => self.registers.E &= !(0x1 << bit),
-            Reg::F => self.registers.F &= !(0x1 << bit),
-            Reg::H => self.registers.H &= !(0x1 << bit),
-            Reg::L => self.registers.L &= !(0x1 << bit),
-            _ => panic!("instr_SRL_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
+        value &= !(0x1 << bit);
+        self.set_r8(register, value);
         2
     }
 
@@ -2422,17 +2139,9 @@ impl CPU {
     }
 
     fn instr_SET_u3_r8(&mut self, bit: u8, register: Reg) -> u32 {
-        match register {
-            Reg::A => self.registers.A |= 0x1 << bit,
-            Reg::B => self.registers.B |= 0x1 << bit,
-            Reg::C => self.registers.C |= 0x1 << bit,
-            Reg::D => self.registers.D |= 0x1 << bit,
-            Reg::E => self.registers.E |= 0x1 << bit,
-            Reg::F => self.registers.F |= 0x1 << bit,
-            Reg::H => self.registers.H |= 0x1 << bit,
-            Reg::L => self.registers.L |= 0x1 << bit,
-            _ => panic!("instr_SET_r8 received an invalid register: {:?}", register),
-        };
+        let mut value = self.get_r8(register.clone());
+        value |= 0x1 << bit;
+        self.set_r8(register, value);
         2
     }
 

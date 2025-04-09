@@ -1,12 +1,15 @@
-use Mnemosyne::gameboy::GameBoy;
+use Mnemosyne::gb::GameBoy;
 
 fn run_mooneye_test(rom: &str) {
     let mut gameboy = GameBoy::new();
     gameboy.load_rom(rom);
     gameboy.skip_boot_rom();
 
-    while !gameboy.hit_breakpoint() {
-        gameboy.tick();
+    loop {
+        let (breakpoint, _) = gameboy.tick();
+        if breakpoint {
+            break;
+        }
     }
 
     let register = gameboy.dump_registers();
@@ -44,7 +47,7 @@ mod acceptance_bits {
     #[test_matrix(["mem_oam", "reg_f", "unused_hwio-GS"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/bits/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/bits/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -60,7 +63,7 @@ mod acceptance_instr {
     #[test_matrix(["daa"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/instr/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/instr/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -76,7 +79,7 @@ mod acceptance_interrupts {
     #[test_matrix(["ie_push"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/interrupts/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/interrupts/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -92,7 +95,7 @@ mod acceptance_oam_dma {
     #[test_matrix(["basic", "reg_read", "sources-GS"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/oam_dma/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/oam_dma/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -108,8 +111,7 @@ mod acceptance_ppu {
     #[test_matrix(["hblank_ly_scx_timing-GS", "intr_1_2_timing-GS", "intr_2_0_timing", "intr_2_mode0_timing", "intr_2_mode0_timing_sprites", "intr_2_mode3_timing", "intr_2_oam_ok_timing", "lcdon_timing-GS", "lcdon_write_timing-GS", "stat_irq_blocking", "stat_lyc_onoff", "vblank_stat_intr-GS"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/ppu/"
-                .to_owned()
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/ppu/".to_owned()
                 + test
                 + ".gb"),
         );
@@ -124,7 +126,7 @@ mod acceptance_serial {
     #[test_matrix(["boot_sclk_align-dmgABCmgb"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/serial/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/serial/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -140,7 +142,7 @@ mod acceptance_timer {
     #[test_matrix(["div_write", "rapid_toggle", "tim00", "tim00_div_trigger", "tim01", "tim01_div_trigger", "tim10", "tim10_div_trigger", "tim11", "tim11_div_trigger", "tima_reload", "tima_write_reloading", "tma_write_reloading"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/timer/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/timer/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -156,7 +158,7 @@ mod acceptance {
     #[test_matrix(["add_sp_e_timing", "boot_div-dmgABCmgb", "boot_hwio-dmgABCmgb", "boot_regs-dmgABC", "call_cc_timing", "call_cc_timing2", "call_timing", "call_timing2", "di_timing-GS", "div_timing", "ei_sequence", "ei_timing", "halt_ime0_ei", "halt_ime0_nointr_timing", "halt_ime1_timing", "halt_ime1_timing2-GS", "if_ie_registers", "intr_timing", "jp_cc_timing", "jp_timing", "ld_hl_sp_e_timing", "oam_dma_restart", "oam_dma_start", "oam_dma_timing", "pop_timing", "push_timing", "rapid_di_ei", "ret_cc_timing", "ret_timing", "reti_intr_timing", "reti_timing", "rst_timing"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/".to_owned()
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/".to_owned()
                 + test
                 + ".gb"),
         );
@@ -171,7 +173,7 @@ mod emulator_only_mbc1 {
     #[test_matrix(["bits_bank1", "bits_bank2", "bits_mode", "bits_ramg", "multicart_rom_8Mb", "ram_64kb", "ram_256kb", "rom_1Mb", "rom_2Mb", "rom_4Mb", "rom_8Mb", "rom_16Mb", "rom_512kb"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc1/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc1/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -187,7 +189,7 @@ mod emulator_only_mbc2 {
     #[test_matrix(["bits_ramg", "bits_romb", "bits_unused", "ram", "rom_1Mb", "rom_2Mb", "rom_512kb"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc2/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc2/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -203,7 +205,7 @@ mod emulator_only_mbc5 {
     #[test_matrix(["rom_1Mb", "rom_2Mb", "rom_4Mb", "rom_8Mb", "rom_16Mb", "rom_32Mb", "rom_64Mb", "rom_512kb"])]
     fn test(test: &str) {
         run_mooneye_test(
-            &("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc5/"
+            &("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/emulator-only/mbc5/"
                 .to_owned()
                 + test
                 + ".gb"),
@@ -213,17 +215,20 @@ mod emulator_only_mbc5 {
 
 #[cfg(test)]
 mod manual_only {
-    use Mnemosyne::gameboy::GameBoy;
     use image::{GenericImageView, ImageReader};
+    use Mnemosyne::gb::GameBoy;
 
     #[test]
     fn test() {
         let mut gameboy = GameBoy::new();
-        gameboy.load_rom("../../tests/game-boy-test-roms/artifacts/mooneye-test-suite/manual-only/sprite_priority.gb");
+        gameboy.load_rom("./tests/game-boy-test-roms/artifacts/mooneye-test-suite/manual-only/sprite_priority.gb");
         gameboy.skip_boot_rom();
 
-        while !gameboy.hit_breakpoint() {
-            gameboy.tick()
+        loop {
+            let (breakpoint, _) = gameboy.tick();
+            if breakpoint {
+                break;
+            }
         }
 
         let mut output_img = vec![0; 160 * 144 * 4];

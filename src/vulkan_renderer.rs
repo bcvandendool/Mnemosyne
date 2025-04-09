@@ -1,11 +1,13 @@
-use crate::egui_renderer::EguiRenderer;
+use crate::egui_renderer::{CallbackContext, EguiRenderer};
 use crate::emulator::EmulatorState;
-use std::sync::Arc;
+use egui::PaintCallbackInfo;
+use std::sync::{Arc, Mutex};
+use std::vec;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, RenderingAttachmentInfo,
-    RenderingInfo,
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer,
+    RenderingAttachmentInfo, RenderingInfo,
 };
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
@@ -37,25 +39,39 @@ use vulkano::swapchain::{PresentMode, Surface};
 use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
 use vulkano_util::context::{VulkanoConfig, VulkanoContext};
-use vulkano_util::window::{VulkanoWindows, WindowDescriptor};
+use vulkano_util::window::{VulkanoWindows, WindowDescriptor, WindowMode};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+
+pub(crate) trait EmulatorRenderer: Send {
+    fn sync_render_world(&self, emulator_state: &EmulatorState);
+    fn gpu_upload(&self, builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>);
+    fn render(
+        &self,
+        paint_callback_info: PaintCallbackInfo,
+        callback_context: &mut CallbackContext,
+    );
+    fn create_pipeline(
+        &mut self,
+        vulkano_context: &VulkanoContext,
+        vulkano_windows: &VulkanoWindows,
+    );
+}
 
 pub(crate) struct VulkanRenderer {
     pub(crate) context: VulkanoContext,
     pub(crate) windows: VulkanoWindows,
     pub(crate) command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-    pub(crate) descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-    pub(crate) upload_buffer: Subbuffer<[u8]>,
-    image: Arc<Image>,
-    texture: Arc<ImageView>,
-    texture_sampler: Arc<Sampler>,
+    // pub(crate) descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+    // pub(crate) upload_buffer: Subbuffer<[u8]>,
+    // image: Arc<Image>,
+    // texture: Arc<ImageView>,
+    // texture_sampler: Arc<Sampler>,
+    emulator_renderer: Option<Arc<Mutex<dyn EmulatorRenderer>>>,
     rcx: Option<RenderContext>,
 }
 
 struct RenderContext {
     viewport: Viewport,
-    pipeline: Arc<GraphicsPipeline>,
-    descriptor_set: Arc<DescriptorSet>,
 }
 
 impl VulkanRenderer {
@@ -89,65 +105,51 @@ impl VulkanRenderer {
             context.device().clone(),
             Default::default(),
         ));
-        let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
-            context.device().clone(),
-            Default::default(),
-        ));
 
-        let texture_sampler =
-            Sampler::new(context.device().clone(), SamplerCreateInfo::default()).unwrap();
-
-        let upload_buffer: Subbuffer<[u8]> = Buffer::new_slice(
-            context.memory_allocator().clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            (160 * 144 * 4) as DeviceSize, // Size of Game Boy screen
-        )
-        .unwrap();
-
-        let png_bytes = include_bytes!("tetris.png").as_slice();
-        let decoder = png::Decoder::new(png_bytes);
-        let mut reader = decoder.read_info().unwrap();
-
-        {
-            reader
-                .next_frame(&mut upload_buffer.write().unwrap())
-                .unwrap();
-        }
-
-        let image = Image::new(
-            context.memory_allocator().clone(),
-            ImageCreateInfo {
-                image_type: ImageType::Dim2d,
-                format: Format::R8G8B8A8_SRGB,
-                extent: [160, 144, 1], // Size of Game Boy screen
-                usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
-                ..Default::default()
-            },
-            AllocationCreateInfo::default(),
-        )
-        .unwrap();
-
-        let texture = ImageView::new_default(image.clone()).unwrap();
+        // let upload_buffer: Subbuffer<[u8]> = Buffer::new_slice(
+        //     context.memory_allocator().clone(),
+        //     BufferCreateInfo {
+        //         usage: BufferUsage::TRANSFER_SRC,
+        //         ..Default::default()
+        //     },
+        //     AllocationCreateInfo {
+        //         memory_type_filter: MemoryTypeFilter::PREFER_HOST
+        //             | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+        //         ..Default::default()
+        //     },
+        //     (160 * 144 * 4) as DeviceSize, // Size of Game Boy screen
+        // )
+        // .unwrap();
+        //
+        // let png_bytes = include_bytes!("tetris.png").as_slice();
+        // let decoder = png::Decoder::new(png_bytes);
+        // let mut reader = decoder.read_info().unwrap();
+        //
+        // {
+        //     reader
+        //         .next_frame(&mut upload_buffer.write().unwrap())
+        //         .unwrap();
+        // }
 
         VulkanRenderer {
             context,
             windows,
             command_buffer_allocator,
-            descriptor_set_allocator,
-            upload_buffer,
-            image,
-            texture,
-            texture_sampler,
+            // descriptor_set_allocator,
+            // upload_buffer,
+            // image,
+            // texture,
+            // texture_sampler,
+            emulator_renderer: None,
             rcx: None,
         }
+    }
+
+    pub(crate) fn set_emulator_renderer(
+        &mut self,
+        emulator_renderer: Arc<Mutex<dyn EmulatorRenderer>>,
+    ) {
+        self.emulator_renderer = Some(emulator_renderer);
     }
 
     pub(crate) fn resize(&mut self) {
@@ -206,13 +208,13 @@ impl VulkanRenderer {
         )
         .unwrap();
 
-        // upload texture to gpu
-        builder
-            .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
-                self.upload_buffer.clone(),
-                self.image.clone(),
-            ))
-            .unwrap();
+        match &self.emulator_renderer {
+            None => {}
+            Some(emulator_renderer) => {
+                let a = emulator_renderer.lock().expect("Bla");
+                a.gpu_upload(&mut builder);
+            }
+        };
 
         // Render commands
         builder
@@ -241,21 +243,34 @@ impl VulkanRenderer {
                     .into_iter()
                     .collect(),
             )
-            .unwrap()
-            .bind_pipeline_graphics(self.rcx.as_mut().unwrap().pipeline.clone())
-            .unwrap()
-            .bind_descriptor_sets(
-                PipelineBindPoint::Graphics,
-                self.rcx.as_mut().unwrap().pipeline.layout().clone(),
-                0,
-                self.rcx.as_mut().unwrap().descriptor_set.clone(),
-            )
             .unwrap();
+        // .bind_pipeline_graphics(self.rcx.as_mut().unwrap().pipeline.clone())
+        // .unwrap()
+        // .bind_descriptor_sets(
+        //     PipelineBindPoint::Graphics,
+        //     self.rcx.as_mut().unwrap().pipeline.layout().clone(),
+        //     0,
+        //     self.rcx.as_mut().unwrap().descriptor_set.clone(),
+        // )
+        // .unwrap();
 
-        unsafe { builder.draw(3, 1, 0, 0) }.unwrap();
+        // unsafe { builder.draw(3, 1, 0, 0) }.unwrap();
+
+        let bla = match &self.emulator_renderer {
+            None => {
+                panic!()
+            }
+            Some(emulator_renderer) => emulator_renderer,
+        };
 
         // Render egui pipeline
-        renderer_egui.render(&self.context, &self.windows, &mut builder, emu_state);
+        renderer_egui.render(
+            &self.context,
+            &self.windows,
+            &mut builder,
+            emu_state,
+            bla.clone(),
+        );
 
         // Finish rendering state
         builder.end_rendering().unwrap();
@@ -281,86 +296,25 @@ impl VulkanRenderer {
         }
 
         let window_descriptor = WindowDescriptor {
-            width: 1280.0 * 1.25,
-            height: 720.0 * 1.25,
+            width: 1920.0,
+            height: 1080.0,
             present_mode: PresentMode::Mailbox,
-
             title: "Mnemosyne".parse().unwrap(),
-
             ..Default::default()
         };
         self.windows
             .create_window(event_loop, &self.context, &window_descriptor, |_| {});
     }
 
-    fn create_pipeline(&mut self) -> Arc<GraphicsPipeline> {
-        let vs = vs::load(self.context.device().clone())
-            .unwrap()
-            .entry_point("main")
-            .unwrap();
-        let fs = fs::load(self.context.device().clone())
-            .unwrap()
-            .entry_point("main")
-            .unwrap();
-
-        let stages = [
-            PipelineShaderStageCreateInfo::new(vs),
-            PipelineShaderStageCreateInfo::new(fs),
-        ];
-
-        let layout = PipelineLayout::new(
-            self.context.device().clone(),
-            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                .into_pipeline_layout_create_info(self.context.device().clone())
-                .unwrap(),
-        )
-        .unwrap();
-
-        let subpass = PipelineRenderingCreateInfo {
-            color_attachment_formats: vec![Some(
-                self.windows
-                    .get_primary_renderer()
-                    .unwrap()
-                    .swapchain_format(),
-            )],
-            ..Default::default()
-        };
-
-        GraphicsPipeline::new(
-            self.context.device().clone(),
-            None,
-            GraphicsPipelineCreateInfo {
-                stages: stages.into_iter().collect(),
-                vertex_input_state: Some(VertexInputState::default()),
-                input_assembly_state: Some(InputAssemblyState {
-                    topology: PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                }),
-                viewport_state: Some(ViewportState::default()),
-                rasterization_state: Some(RasterizationState {
-                    cull_mode: CullMode::Front,
-                    front_face: FrontFace::CounterClockwise,
-                    ..Default::default()
-                }),
-                multisample_state: Some(MultisampleState::default()),
-                color_blend_state: Some(ColorBlendState::with_attachment_states(
-                    subpass.color_attachment_formats.len() as u32,
-                    ColorBlendAttachmentState {
-                        blend: Some(AttachmentBlend::alpha()),
-                        ..Default::default()
-                    },
-                )),
-                dynamic_state: [DynamicState::Viewport].into_iter().collect(),
-                subpass: Some(subpass.into()),
-                ..GraphicsPipelineCreateInfo::layout(layout)
-            },
-        )
-        .unwrap()
-    }
-
     pub(crate) fn create_render_context(&mut self, event_loop: &ActiveEventLoop) {
         self.create_windows(event_loop);
-        let pipeline = self.create_pipeline();
+        match &self.emulator_renderer {
+            None => {}
+            Some(test) => {
+                let mut bla = test.lock().unwrap();
+                bla.create_pipeline(&self.context, &self.windows);
+            }
+        }
 
         let viewport = Viewport {
             offset: [0.0, 0.0],
@@ -373,57 +327,6 @@ impl VulkanRenderer {
             depth_range: 0.0..=1.0,
         };
 
-        let layout = &pipeline.layout().set_layouts()[0];
-        let descriptor_set = DescriptorSet::new(
-            self.descriptor_set_allocator.clone(),
-            layout.clone(),
-            [
-                WriteDescriptorSet::sampler(0, self.texture_sampler.clone()),
-                WriteDescriptorSet::image_view(1, self.texture.clone()),
-            ],
-            [],
-        )
-        .unwrap();
-
-        self.rcx = Some(RenderContext {
-            pipeline,
-            viewport,
-            descriptor_set,
-        });
-    }
-}
-
-mod vs {
-    vulkano_shaders::shader! {
-        ty: "vertex",
-        src: r"
-            #version 450
-
-            layout(location = 0) out vec2 tex_coords;
-
-            void main() {
-                tex_coords = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-                gl_Position = vec4(tex_coords * 2.0f + -1.0f, 0.0f, 1.0f);
-            }
-        ",
-    }
-}
-
-mod fs {
-    vulkano_shaders::shader! {
-        ty: "fragment",
-        src: r"
-            #version 450
-
-            layout(location = 0) in vec2 tex_coords;
-            layout(location = 0) out vec4 f_color;
-
-            layout(set = 0, binding = 0) uniform sampler s;
-            layout(set = 0, binding = 1) uniform texture2D tex;
-
-            void main() {
-                f_color = texture(sampler2D(tex, s), tex_coords);
-            }
-        ",
+        self.rcx = Some(RenderContext { viewport });
     }
 }

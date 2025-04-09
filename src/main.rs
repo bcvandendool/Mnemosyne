@@ -1,18 +1,21 @@
+mod audio;
+mod cached_ehttp_loader;
+mod config;
 mod egui_renderer;
 mod emulator;
-mod gameboy;
+mod gb;
 mod ui;
 mod vulkan_renderer;
 
 use crate::egui_renderer::EguiRenderer;
-use crate::emulator::{Emulator, SyncMessage};
+use crate::emulator::{Emulator, EmulatorControlMessage, SyncMessage};
 use crate::vulkan_renderer::VulkanRenderer;
 use flexi_logger::{Age, Cleanup, Criterion, FileSpec, LoggerHandle, Naming};
 use std::any::Any;
 use std::error::Error;
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, WindowEvent};
@@ -33,7 +36,7 @@ struct App {
 fn main() -> Result<(), impl Error> {
     // Setup logging
     let egui_logger = Box::new(egui_logger::builder().build());
-    let (flexi_logger, logger_handle) = flexi_logger::Logger::try_with_str("debug")
+    let (flexi_logger, logger_handle) = flexi_logger::Logger::try_with_str("trace")
         .expect("Failed to create flexi_logger")
         .log_to_file(FileSpec::default().directory(PathBuf::from("./log")))
         .rotate(
@@ -43,7 +46,7 @@ fn main() -> Result<(), impl Error> {
         )
         .build()
         .expect("Failed to build flexi_logger");
-    multi_log::MultiLogger::init(vec![egui_logger, flexi_logger], log::Level::Debug)
+    multi_log::MultiLogger::init(vec![egui_logger, flexi_logger], log::Level::Trace)
         .expect("Failed to init multi_logger");
 
     let event_loop = EventLoop::new().unwrap();
@@ -54,22 +57,30 @@ fn main() -> Result<(), impl Error> {
 
 impl App {
     fn new(event_loop: &EventLoop<()>, logger_handle: LoggerHandle) -> Self {
-        let renderer = VulkanRenderer::new(event_loop);
-        let egui_renderer = EguiRenderer::new(
-            &renderer.context,
-            renderer.command_buffer_allocator.clone(),
-            renderer.descriptor_set_allocator.clone(),
-        );
-
         let (tx_main, rx_emulator) = mpsc::sync_channel::<SyncMessage>(0);
         let (tx_emulator, rx_main) = mpsc::sync_channel::<SyncMessage>(0);
         let (tx_controls, rx_controls) = mpsc::channel::<KeyEvent>();
+        let (tx_ui, rx_ui) = mpsc::channel::<EmulatorControlMessage>();
+
+        let mut renderer = VulkanRenderer::new(event_loop);
+        let egui_renderer = EguiRenderer::new(
+            &renderer.context,
+            renderer.command_buffer_allocator.clone(),
+            tx_ui,
+        );
+
+        let emulator_renderer = Arc::new(Mutex::new(crate::gb::renderer::GameboyRenderer::new(
+            &renderer.context,
+            &renderer.windows,
+        )));
+        renderer.set_emulator_renderer(emulator_renderer.clone());
 
         let emulator = Emulator::new(
             rx_emulator,
             tx_emulator,
             rx_controls,
-            renderer.upload_buffer.clone(),
+            rx_ui,
+            emulator_renderer.clone(),
         );
         let join_handle = Emulator::start(emulator);
 
@@ -110,18 +121,20 @@ impl ApplicationHandler for App {
                     .unwrap()
                     .join()
                     .expect("Unable to join on emulator thread");
+                config::save_config();
                 event_loop.exit();
             }
             WindowEvent::Resized(_) => {
                 self.renderer.resize();
             }
             WindowEvent::RedrawRequested => {
+                puffin::GlobalProfiler::lock().new_frame();
                 self.tx_sync
                     .send(SyncMessage::FrameStart(self.egui_renderer.ui_state.clone()))
                     .ok();
-                puffin::GlobalProfiler::lock().new_frame();
-                let emu_state = match self.rx_sync.recv().ok().unwrap() {
+                let emu_state = match self.rx_sync.recv().ok().unwrap_or(SyncMessage::Exit) {
                     SyncMessage::StateSynchronized(emu_state) => emu_state,
+                    SyncMessage::Exit => return,
                     _ => panic!("Unexpected message received on main thread"),
                 };
                 self.renderer.redraw(&mut self.egui_renderer, emu_state);

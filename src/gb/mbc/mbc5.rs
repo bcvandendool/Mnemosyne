@@ -1,5 +1,8 @@
-use crate::gameboy::mbc::MBC;
+use crate::config;
+use crate::gb::mbc::MBC;
 use intbits::Bits;
+use std::fs::File;
+use std::io::{Read, Write};
 
 pub(crate) struct MBC5 {
     name: String,
@@ -46,6 +49,9 @@ impl MBC for MBC5 {
             0x0000..=0x1FFF => {
                 // RAM enable
                 self.reg_ram_enabled = value.bits(0..4) == 0xA;
+                if !self.reg_ram_enabled {
+                    self.save_ram();
+                }
             }
             0x2000..=0x2FFF => {
                 // 8 LSB ROM bank number
@@ -75,6 +81,43 @@ impl MBC for MBC5 {
 
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    fn save_ram(&self) {
+        if self.has_ram {
+            let file: Option<File> = config::THREAD_LOCAL_CONFIG.with(|c| {
+                let mut binding = c.borrow_mut();
+                let save_path = &binding.load().gameboy_config.save_path;
+                if !save_path.is_empty() {
+                    Some(File::create(save_path).expect("Failed to create save file"))
+                } else {
+                    None
+                }
+            });
+
+            if let Some(mut file) = file {
+                file.write_all(&self.ram).unwrap();
+                file.flush().unwrap();
+            }
+        }
+    }
+
+    fn load_ram(&mut self) {
+        if self.has_ram {
+            let file: Option<File> = config::THREAD_LOCAL_CONFIG.with(|c| {
+                let mut binding = c.borrow_mut();
+                let save_path = &binding.load().gameboy_config.save_path;
+                if !save_path.is_empty() {
+                    Some(File::open(save_path).expect("Failed to create save file"))
+                } else {
+                    None
+                }
+            });
+
+            if let Some(mut file) = file {
+                file.read_exact(&mut self.ram).unwrap();
+            }
+        }
     }
 }
 

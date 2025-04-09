@@ -1,13 +1,16 @@
-use Mnemosyne::gameboy::GameBoy;
 use image::{GenericImageView, ImageReader};
+use Mnemosyne::gb::GameBoy;
 #[test]
 fn test() {
     let mut gameboy = GameBoy::new();
-    gameboy.load_rom("../../tests/game-boy-test-roms/artifacts/dmg-acid2/dmg-acid2.gb");
+    gameboy.load_rom("./tests/game-boy-test-roms/artifacts/dmg-acid2/dmg-acid2.gb");
     gameboy.skip_boot_rom();
 
-    while !gameboy.hit_breakpoint() {
-        gameboy.tick()
+    loop {
+        let (breakpoint, _) = gameboy.tick();
+        if breakpoint {
+            break;
+        }
     }
 
     let mut output_img = vec![0; 160 * 144 * 4];

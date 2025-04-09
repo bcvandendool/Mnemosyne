@@ -1,10 +1,15 @@
-use crate::emulator::EmulatorState;
+use crate::cached_ehttp_loader::CachedEhttpLoader;
+use crate::emulator::{EmulatorControlMessage, EmulatorState};
 use crate::ui::{create_ui, UIContext, UIState};
+use crate::vulkan_renderer::EmulatorRenderer;
+use directories::ProjectDirs;
 use egui::ahash::AHashMap;
 use egui::epaint::{ImageDelta, Primitive};
-use egui::{ClippedPrimitive, Context, Rect, TextureId};
+use egui::{ClippedPrimitive, Context, PaintCallbackInfo, Rect, TextureId};
 use egui_winit::State;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use vulkano::buffer::allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo};
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -90,7 +95,7 @@ impl EguiRenderer {
     pub(crate) fn new(
         vulkano_context: &VulkanoContext,
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-        descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+        tx_ui: Sender<EmulatorControlMessage>,
     ) -> Self {
         let vertex_index_buffer_pool = SubbufferAllocator::new(
             vulkano_context.memory_allocator().clone(),
@@ -145,8 +150,13 @@ impl EguiRenderer {
             }
         };
 
+        let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+            vulkano_context.device().clone(),
+            Default::default(),
+        ));
+
         EguiRenderer {
-            ui_state: UIState::new(),
+            ui_state: UIState::new(tx_ui),
             ui_context: UIContext::new(),
             vertex_index_buffer_pool,
             font_sampler,
@@ -165,6 +175,19 @@ impl EguiRenderer {
         vulkano_windows: &VulkanoWindows,
     ) {
         let egui_context = Context::default();
+
+        egui_material_icons::initialize(&egui_context);
+        egui_extras::install_image_loaders(&egui_context);
+
+        let cached_ehttp_loader = Arc::new(CachedEhttpLoader::default());
+        egui_context.add_bytes_loader(cached_ehttp_loader.clone());
+
+        let project_dirs = ProjectDirs::from("", "", "Mnemosyne").unwrap();
+        let mut cache_path = PathBuf::new();
+        cache_path.push(project_dirs.cache_dir());
+        cache_path.push("boxart/");
+        std::fs::create_dir_all(&cache_path).expect("Failed to create cache directory");
+
         let egui_winit_state = State::new(
             egui_context.clone(),
             egui::viewport::ViewportId::ROOT,
@@ -608,6 +631,7 @@ impl EguiRenderer {
         vulkano_windows: &VulkanoWindows,
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         emu_state: EmulatorState,
+        emulator_renderer: Arc<Mutex<dyn EmulatorRenderer>>,
     ) {
         puffin::profile_scope!("Render UI");
         let rcx = self.rcx.as_mut().unwrap();
@@ -624,6 +648,7 @@ impl EguiRenderer {
             &mut self.ui_state,
             emu_state,
             &mut self.ui_context,
+            emulator_renderer,
         );
 
         let full_output = egui_context.end_pass();
@@ -633,13 +658,17 @@ impl EguiRenderer {
         );
 
         let textures_delta = full_output.textures_delta;
-        let clipped_meshes = egui_context.tessellate(
-            full_output.shapes,
-            egui_winit::pixels_per_point(
-                egui_context,
-                vulkano_windows.get_primary_window().unwrap(),
-            ),
-        );
+        let clipped_meshes;
+        {
+            puffin::profile_scope!("Render UI - Tesselate");
+            clipped_meshes = egui_context.tessellate(
+                full_output.shapes,
+                egui_winit::pixels_per_point(
+                    egui_context,
+                    vulkano_windows.get_primary_window().unwrap(),
+                ),
+            );
+        }
 
         self.upload_egui_textures(vulkano_context, textures_delta.set);
         let rcx = self.rcx.as_mut().unwrap();
@@ -676,88 +705,203 @@ impl EguiRenderer {
         let mut current_rect = None;
         let mut current_texture = None;
 
-        for ClippedPrimitive {
-            clip_rect,
-            primitive,
-        } in clipped_meshes
         {
-            match primitive {
-                Primitive::Mesh(mesh) => {
-                    if mesh.vertices.is_empty() || mesh.indices.is_empty() {
-                        index_cursor += mesh.indices.len() as u32;
-                        vertex_cursor += mesh.vertices.len() as u32;
-                        continue;
-                    }
-                    if needs_full_rebind {
-                        needs_full_rebind = false;
-
-                        let Some((vertices, indices)) = mesh_buffers.clone() else {
-                            unreachable!()
-                        };
-
-                        builder
-                            .bind_pipeline_graphics(rcx.pipeline.clone())
-                            .unwrap()
-                            .bind_index_buffer(indices)
-                            .unwrap()
-                            .bind_vertex_buffers(0, [vertices])
-                            .unwrap()
-                            .set_viewport(0, [rcx.viewport.clone()].into_iter().collect())
-                            .unwrap()
-                            .push_constants(rcx.pipeline.layout().clone(), 0, push_constants)
-                            .unwrap();
-                    }
-                    if current_texture != Some(mesh.texture_id) {
-                        if self.texture_desc_sets.get(&mesh.texture_id).is_none() {
-                            eprintln!("This texture no longer exists {:?}", mesh.texture_id);
+            puffin::profile_scope!("Render UI - Process primitives");
+            for ClippedPrimitive {
+                clip_rect,
+                primitive,
+            } in clipped_meshes
+            {
+                match primitive {
+                    Primitive::Mesh(mesh) => {
+                        if mesh.vertices.is_empty() || mesh.indices.is_empty() {
+                            index_cursor += mesh.indices.len() as u32;
+                            vertex_cursor += mesh.vertices.len() as u32;
                             continue;
                         }
-                        current_texture = Some(mesh.texture_id);
-                        let desc_set = self.texture_desc_sets.get(&mesh.texture_id).unwrap();
+                        if needs_full_rebind {
+                            needs_full_rebind = false;
 
-                        builder
-                            .bind_descriptor_sets(
-                                PipelineBindPoint::Graphics,
-                                rcx.pipeline.layout().clone(),
-                                0,
-                                desc_set.clone(),
-                            )
-                            .unwrap();
-                    };
-                    if current_rect != Some(clip_rect) {
-                        current_rect = Some(clip_rect);
-                        let new_scissor = Self::get_rect_scissor(
-                            egui_winit::pixels_per_point(
+                            let Some((vertices, indices)) = mesh_buffers.clone() else {
+                                unreachable!()
+                            };
+
+                            builder
+                                .bind_pipeline_graphics(rcx.pipeline.clone())
+                                .unwrap()
+                                .bind_index_buffer(indices)
+                                .unwrap()
+                                .bind_vertex_buffers(0, [vertices])
+                                .unwrap()
+                                .set_viewport(0, [rcx.viewport.clone()].into_iter().collect())
+                                .unwrap()
+                                .push_constants(rcx.pipeline.layout().clone(), 0, push_constants)
+                                .unwrap();
+                        }
+                        if current_texture != Some(mesh.texture_id) {
+                            if self.texture_desc_sets.get(&mesh.texture_id).is_none() {
+                                eprintln!("This texture no longer exists {:?}", mesh.texture_id);
+                                continue;
+                            }
+                            current_texture = Some(mesh.texture_id);
+                            let desc_set = self.texture_desc_sets.get(&mesh.texture_id).unwrap();
+
+                            builder
+                                .bind_descriptor_sets(
+                                    PipelineBindPoint::Graphics,
+                                    rcx.pipeline.layout().clone(),
+                                    0,
+                                    desc_set.clone(),
+                                )
+                                .unwrap();
+                        };
+                        if current_rect != Some(clip_rect) {
+                            current_rect = Some(clip_rect);
+                            let new_scissor = Self::get_rect_scissor(
+                                egui_winit::pixels_per_point(
+                                    &rcx.egui_context,
+                                    vulkano_windows.get_primary_window().unwrap(),
+                                ),
+                                [window_size.width, window_size.height],
+                                clip_rect,
+                            );
+
+                            builder
+                                .set_scissor(0, [new_scissor].into_iter().collect())
+                                .unwrap();
+                        }
+
+                        unsafe {
+                            builder
+                                .draw_indexed(
+                                    mesh.indices.len() as u32,
+                                    1,
+                                    index_cursor,
+                                    vertex_cursor as i32,
+                                    0,
+                                )
+                                .unwrap();
+                        }
+
+                        index_cursor += mesh.indices.len() as u32;
+                        vertex_cursor += mesh.vertices.len() as u32;
+                    }
+                    Primitive::Callback(callback) => {
+                        if callback.rect.is_positive() {
+                            let Some(callback_fn) = callback.callback.downcast_ref::<CallbackFn>()
+                            else {
+                                println!(
+                                    "Warning: Unsupported render callback. Expected \
+                                 egui_winit_vulkano::CallbackFn"
+                                );
+                                continue;
+                            };
+
+                            let rect_min_x = egui_winit::pixels_per_point(
                                 &rcx.egui_context,
                                 vulkano_windows.get_primary_window().unwrap(),
-                            ),
-                            [window_size.width, window_size.height],
-                            clip_rect,
-                        );
+                            ) * callback.rect.min.x;
+                            let rect_min_y = egui_winit::pixels_per_point(
+                                &rcx.egui_context,
+                                vulkano_windows.get_primary_window().unwrap(),
+                            ) * callback.rect.min.y;
+                            let rect_max_x = egui_winit::pixels_per_point(
+                                &rcx.egui_context,
+                                vulkano_windows.get_primary_window().unwrap(),
+                            ) * callback.rect.max.x;
+                            let rect_max_y = egui_winit::pixels_per_point(
+                                &rcx.egui_context,
+                                vulkano_windows.get_primary_window().unwrap(),
+                            ) * callback.rect.max.y;
 
-                        builder
-                            .set_scissor(0, [new_scissor].into_iter().collect())
-                            .unwrap();
+                            let rect_min_x = rect_min_x.round();
+                            let rect_min_y = rect_min_y.round();
+                            let rect_max_x = rect_max_x.round();
+                            let rect_max_y = rect_max_y.round();
+
+                            builder
+                                .set_viewport(
+                                    0,
+                                    [Viewport {
+                                        offset: [rect_min_x, rect_min_y],
+                                        extent: [rect_max_x - rect_min_x, rect_max_y - rect_min_y],
+                                        depth_range: 0.0..=1.0,
+                                    }]
+                                    .into_iter()
+                                    .collect(),
+                                )
+                                .unwrap()
+                                .set_scissor(
+                                    0,
+                                    [Self::get_rect_scissor(
+                                        egui_winit::pixels_per_point(
+                                            &rcx.egui_context,
+                                            vulkano_windows.get_primary_window().unwrap(),
+                                        ),
+                                        [window_size.width, window_size.height],
+                                        clip_rect,
+                                    )]
+                                    .into_iter()
+                                    .collect(),
+                                )
+                                .unwrap();
+
+                            let info = egui::PaintCallbackInfo {
+                                viewport: callback.rect,
+                                clip_rect,
+                                pixels_per_point: egui_winit::pixels_per_point(
+                                    &rcx.egui_context,
+                                    vulkano_windows.get_primary_window().unwrap(),
+                                ),
+                                screen_size_px: [window_size.width, window_size.height],
+                            };
+                            (callback_fn.f)(
+                                info,
+                                &mut CallbackContext {
+                                    builder,
+                                    resources: vulkano_context,
+                                },
+                            );
+
+                            // The user could have done much here - rebind pipes, set views, bind things, etc.
+                            // Mark all state as lost so that next mesh rebinds everything to a known state.
+                            needs_full_rebind = true;
+                            current_rect = None;
+                            current_texture = None;
+                        }
                     }
-
-                    unsafe {
-                        builder
-                            .draw_indexed(
-                                mesh.indices.len() as u32,
-                                1,
-                                index_cursor,
-                                vertex_cursor as i32,
-                                0,
-                            )
-                            .unwrap();
-                    }
-
-                    index_cursor += mesh.indices.len() as u32;
-                    vertex_cursor += mesh.vertices.len() as u32;
                 }
-                Primitive::Callback(_) => {}
             }
         }
+    }
+}
+
+pub struct CallbackContext<'a> {
+    pub builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    pub resources: &'a VulkanoContext,
+}
+
+pub type CallbackFnDef = dyn Fn(PaintCallbackInfo, &mut CallbackContext) + Sync + Send;
+
+/// A callback function that can be used to compose an [`epaint::PaintCallback`] for
+/// custom rendering with [`vulkano`].
+///
+/// The callback is passed an [`egui::PaintCallbackInfo`] and a [`CallbackContext`] which
+/// can be used to construct Vulkano graphics pipelines and buffers.
+///
+/// # Example
+///
+/// See the `triangle` demo source for a detailed usage example.
+pub struct CallbackFn {
+    pub(crate) f: Box<CallbackFnDef>,
+}
+
+impl CallbackFn {
+    pub fn new<F: Fn(PaintCallbackInfo, &mut CallbackContext) + Sync + Send + 'static>(
+        callback: F,
+    ) -> Self {
+        let f = Box::new(callback);
+        CallbackFn { f }
     }
 }
 

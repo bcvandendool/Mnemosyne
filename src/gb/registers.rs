@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::fmt::{Display, Formatter};
+
 #[derive(Clone)]
 pub struct Registers {
     // Normal register
@@ -21,7 +23,7 @@ pub struct Registers {
     pub IR: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Reg {
     A,
     B,
@@ -39,6 +41,12 @@ pub enum Reg {
     HL,
 }
 
+impl Display for Reg {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 pub enum Flag {
     ZERO = 0x80,
     SUBTRACTION = 0x40,
@@ -46,12 +54,18 @@ pub enum Flag {
     CARRY = 0x10,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum ConditionCode {
     Z,
     NZ,
     C,
     NC,
+}
+
+impl Display for ConditionCode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl Registers {

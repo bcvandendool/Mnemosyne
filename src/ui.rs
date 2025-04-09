@@ -1,11 +1,19 @@
-use crate::emulator::EmulatorState;
-use crate::gameboy::disassembler::Disassembler;
-use crate::gameboy::registers::Flag;
+mod components;
+mod views;
+
+use crate::egui_renderer::CallbackFn;
+use crate::emulator::{EmulatorControlMessage, EmulatorState};
+use crate::gb::breakpoints::Breakpoints;
+use crate::gb::disassembler::{Address, Disassembler};
+use crate::gb::registers::Flag;
+use crate::vulkan_renderer::EmulatorRenderer;
 use egui::text::{LayoutJob, LayoutSection};
-use egui::{Align, Context, TextFormat, TextStyle};
+use egui::{menu, vec2, Align, Context, PaintCallback, Rgba, Sense, TextFormat, TextStyle};
 use egui_extras::{Column, TableBuilder};
-use std::collections::HashSet;
+use std::ops::Deref;
 use std::path::Path;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
 use syntect::parsing::{SyntaxSet, SyntaxSetBuilder};
@@ -18,12 +26,25 @@ enum BottomPanels {
 }
 
 #[derive(Clone)]
+enum Views {
+    Fullscreen,
+    Debugger,
+    GameList,
+}
+
+#[derive(Clone)]
 pub struct UIState {
     pub(crate) emulator_running: bool,
     pub(crate) emulator_should_step: bool,
-    breakpoints: HashSet<usize>,
+    pub(crate) breakpoints: Breakpoints,
     pub(crate) selected_memory: Memories,
     bottom_panel: BottomPanels,
+    volume: f32,
+    current_view: Views,
+    game_list: Vec<String>,
+    selected_game: String,
+    search_string: String,
+    tx_ui: Sender<EmulatorControlMessage>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -43,7 +64,7 @@ pub(crate) struct UIContext {
     ps: SyntaxSet,
     previous_pc: u16,
     disassembler: Disassembler,
-    boot_rom: Vec<(u16, String)>,
+    disassembly: Vec<(Option<Address>, String)>,
 }
 
 impl UIContext {
@@ -54,41 +75,54 @@ impl UIContext {
             .add_from_folder(Path::new("./"), false)
             .expect("Failed to load syntax files");
         let ps = builder.build();
-        let disassembler = Disassembler::new();
-        let boot_rom = disassembler.disassemble_section(
-            &include_bytes!("../tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/interrupts/ie_push.gb")
-                .to_vec(),
-            0x00,
-            0x7FFF,
-        );
+
+        let mut disassembler = Disassembler::new(Path::new("./src/roms/rex-run.gb"));
+        disassembler.disassemble();
+        disassembler.save_sym_file(Path::new("./src/roms/rex-run.sym"));
+
+        let table = disassembler.to_table();
 
         UIContext {
             ts,
             ps,
             previous_pc: 0x00FF,
             disassembler,
-            boot_rom,
+            disassembly: table,
         }
     }
 }
 
 impl UIState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tx_ui: Sender<EmulatorControlMessage>) -> Self {
         UIState {
             emulator_running: false,
             emulator_should_step: false,
-            breakpoints: HashSet::new(),
+            breakpoints: Breakpoints::new(),
             selected_memory: Memories::WRAM1,
             bottom_panel: BottomPanels::Logger,
+            volume: 50.0,
+            current_view: Views::GameList,
+            game_list: Vec::new(),
+            selected_game: String::new(),
+            search_string: "Search".to_string(),
+            tx_ui,
         }
     }
 
-    fn toggle_row_selection(&mut self, row_index: usize, row_response: &egui::Response) {
-        if row_response.clicked() {
-            if self.breakpoints.contains(&row_index) {
-                self.breakpoints.remove(&row_index);
+    fn toggle_row_selection(&mut self, address: Option<Address>, row_response: &egui::Response) {
+        if address.is_some() && row_response.clicked() {
+            if self
+                .breakpoints
+                .breakpoints
+                .contains(&address.clone().unwrap().address)
+            {
+                self.breakpoints
+                    .breakpoints
+                    .remove(&(address.unwrap().address));
             } else {
-                self.breakpoints.insert(row_index);
+                self.breakpoints
+                    .breakpoints
+                    .insert(address.unwrap().address);
             }
         }
     }
@@ -100,397 +134,40 @@ pub(crate) fn create_ui(
     ui_state: &mut UIState,
     emu_state: EmulatorState,
     ui_context: &mut UIContext,
+    emulator_renderer: Arc<Mutex<dyn EmulatorRenderer>>,
 ) {
-    // Calculate size of gameboy screen
-    let mut gameboy_width = (size.width as f32 / 6.0) * 4.0;
-    let mut gameboy_height = (gameboy_width / 10.0) * 9.0;
+    puffin::profile_scope!("Create UI");
 
-    if gameboy_height > (size.height as f32 / 4.0) * 3.0 {
-        gameboy_height = (size.height as f32 / 4.0) * 3.0;
-        gameboy_width = (gameboy_height / 9.0) * 10.0;
+    match ui_state.current_view {
+        Views::Debugger => {
+            views::debugger::render(
+                egui_context,
+                ui_state,
+                &emu_state,
+                ui_context,
+                emulator_renderer,
+            );
+        }
+        Views::Fullscreen => {
+            views::fullscreen::render(
+                egui_context,
+                ui_state,
+                &emu_state,
+                ui_context,
+                emulator_renderer,
+            );
+        }
+        Views::GameList => {
+            views::game_list::render(
+                egui_context,
+                size,
+                ui_state,
+                &emu_state,
+                ui_context,
+                emulator_renderer,
+            );
+        }
     }
-    let gameboy_offset_x = (size.width as f32 / 2.0 - gameboy_width / 2.0) * 1.20;
-
-    egui::SidePanel::left("left_panel")
-        .resizable(false)
-        .exact_width(gameboy_offset_x.round())
-        .show(egui_context, |ui| {
-            ui.label("Memory viewer");
-            egui::ComboBox::from_label("Select memory to view")
-                .selected_text(format!("{:?}", ui_state.selected_memory))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut ui_state.selected_memory, Memories::WRAM1, "WRAM1");
-                    ui.selectable_value(&mut ui_state.selected_memory, Memories::WRAM2, "WRAM2");
-                    ui.selectable_value(&mut ui_state.selected_memory, Memories::HRAM, "HRAM");
-                    ui.selectable_value(
-                        &mut ui_state.selected_memory,
-                        Memories::BackgroundMaps,
-                        "Background maps",
-                    );
-                    ui.selectable_value(
-                        &mut ui_state.selected_memory,
-                        Memories::TileData,
-                        "Tile data",
-                    );
-                });
-            ui.separator();
-
-            if ui_state.selected_memory == Memories::WRAM1
-                || ui_state.selected_memory == Memories::WRAM2
-                || ui_state.selected_memory == Memories::HRAM
-                || ui_state.selected_memory == Memories::BackgroundMaps
-            {
-                // Memory table
-                ui.label("Memory view");
-                let memory_table = TableBuilder::new(ui)
-                    .id_salt(0)
-                    .striped(true)
-                    .resizable(false)
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::auto())
-                    .columns(Column::exact(18.0), 16);
-
-                let memory_prefix = match ui_state.selected_memory {
-                    Memories::WRAM1 => 0xC000,
-                    Memories::WRAM2 => 0xD000,
-                    Memories::HRAM => 0xFF80,
-                    _ => 0x0,
-                };
-
-                memory_table
-                    .header(18.0, |mut header| {
-                        header.col(|ui| {
-                            ui.label("Address");
-                        });
-                        for i in 0x00..=0x0F {
-                            header.col(|ui| {
-                                ui.label(format!("{:X}   ", i));
-                            });
-                        }
-                    })
-                    .body(|mut body| {
-                        body.rows(18.0, emu_state.ram.len().div_ceil(16), |mut row| {
-                            let row_index = row.index();
-
-                            row.col(|ui| {
-                                ui.label(format!("{:#06X}", memory_prefix + (row_index << 4)));
-                            });
-
-                            for i in 0x00..=0x0F {
-                                row.col(|ui| {
-                                    ui.label(format!("{:X}", emu_state.ram[(row_index << 4) + i]));
-                                });
-                            }
-                        })
-                    });
-            }
-
-            if ui_state.selected_memory == Memories::TileData {
-                if emu_state.ram.len() != 6144 {
-                    // Data not loaded yet, skip
-                } else {
-                    // TODO: do not create images every frame, only on data received from emu
-                    // and make sure that it actually changed, as the image creation is expensive
-                    for j in 0..24 {
-                        ui.horizontal(|ui| {
-                            for k in 0..16 {
-                                let i = j * 8 + k;
-                                let mut image_bytes: Vec<egui::Color32> = Vec::new();
-                                for y in 0..8 {
-                                    let tile_hi = emu_state.ram[i * 16 + y * 2];
-                                    let tile_lo = emu_state.ram[i * 16 + y * 2 + 1];
-                                    for x in 0..8 {
-                                        let idx = 7 - x;
-                                        let color_id =
-                                            ((tile_hi >> idx) & 1) << 1 | ((tile_lo >> idx) & 1);
-                                        let color: u8 = match color_id {
-                                            0 => 0xFF,
-                                            1 => 0xAA,
-                                            2 => 0x55,
-                                            3 => 0x00,
-                                            _ => panic!("Received invalid color code"),
-                                        };
-                                        let pixel = egui::Color32::from_rgb(color, color, color);
-                                        image_bytes.push(pixel)
-                                    }
-                                }
-                                let image = egui::ColorImage {
-                                    size: [8, 8],
-                                    pixels: image_bytes,
-                                };
-                                let texture = egui_context.load_texture(
-                                    format!("tile_{}", i),
-                                    image,
-                                    egui::TextureOptions::NEAREST,
-                                );
-                                let size = texture.size_vec2();
-                                let sized_texture = egui::load::SizedTexture::new(&texture, size);
-                                ui.add(
-                                    egui::Image::new(sized_texture)
-                                        .fit_to_exact_size([size.x * 2.0, size.y * 2.0].into()),
-                                );
-                            }
-                        });
-                    }
-                }
-            }
-        });
-
-    egui::SidePanel::right("right_panel")
-        .resizable(false)
-        .exact_width(size.width as f32 - gameboy_offset_x.round() - gameboy_width.round())
-        .show(egui_context, |ui| {
-            ui.label("Gameboy emulator controls");
-
-            // Emulator controls
-            ui.horizontal(|ui| {
-                let button_text = if ui_state.emulator_running {
-                    "Pause"
-                } else {
-                    "Start"
-                };
-                if ui.button(button_text).clicked() {
-                    ui_state.emulator_running = !ui_state.emulator_running;
-                }
-
-                ui_state.emulator_should_step = ui.button("Step").clicked();
-            });
-            ui.separator();
-
-            // Register viewer
-            ui.label("Register view");
-            let register_table = TableBuilder::new(ui)
-                .id_salt(0)
-                .striped(false)
-                .resizable(false)
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Column::auto())
-                .column(Column::auto())
-                .column(Column::auto())
-                .column(Column::auto())
-                .column(Column::auto())
-                .column(Column::auto());
-
-            register_table.body(|mut body| {
-                body.row(18.0, |mut row| {
-                    row.col(|ui| {
-                        ui.label("Reg A: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#04X}", emu_state.registers.A));
-                    });
-                    row.col(|ui| {
-                        ui.label("Reg F: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#04X}", emu_state.registers.F));
-                    });
-                    row.col(|ui| {
-                        ui.label("Flags: ");
-                    });
-                    row.col(|ui| {
-                        let mut flags = Vec::new();
-                        if emu_state.registers.has_flag(Flag::ZERO) {
-                            flags.push("Z");
-                        }
-                        if emu_state.registers.has_flag(Flag::SUBTRACTION) {
-                            flags.push("N");
-                        }
-                        if emu_state.registers.has_flag(Flag::HALF_CARRY) {
-                            flags.push("H");
-                        }
-                        if emu_state.registers.has_flag(Flag::CARRY) {
-                            flags.push("C");
-                        }
-                        ui.label(format!("{:?}", flags));
-                    });
-                });
-                body.row(18.0, |mut row| {
-                    row.col(|ui| {
-                        ui.label("Reg B: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#04X}", emu_state.registers.B));
-                    });
-                    row.col(|ui| {
-                        ui.label("Reg C: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#04X}", emu_state.registers.C));
-                    });
-                    row.col(|ui| {
-                        ui.label("Reg SP: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#06X}", emu_state.registers.SP));
-                    });
-                });
-                body.row(18.0, |mut row| {
-                    row.col(|ui| {
-                        ui.label("Reg D: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#04X}", emu_state.registers.D));
-                    });
-                    row.col(|ui| {
-                        ui.label("Reg E: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#04X}", emu_state.registers.E));
-                    });
-                    row.col(|ui| {
-                        ui.label("Reg PC: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#06X}", emu_state.registers.PC));
-                    });
-                });
-                body.row(18.0, |mut row| {
-                    row.col(|ui| {
-                        ui.label("Reg H: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#04X}", emu_state.registers.H));
-                    });
-                    row.col(|ui| {
-                        ui.label("Reg L: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:#04X}", emu_state.registers.L));
-                    });
-                    row.col(|ui| {
-                        ui.label("Reg IME: ");
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{}", u8::from(emu_state.registers.IME)));
-                    });
-                })
-            });
-            ui.separator();
-
-            let syntax = ui_context
-                .ps
-                .find_syntax_by_extension("rgbasm")
-                .expect("Failed to find rgbasm syntax definition");
-
-            let mut h = HighlightLines::new(syntax, &ui_context.ts.themes["base16-mocha.dark"]);
-
-            // Disassembler
-            let available_height = ui.available_height();
-            let mut disassembly_table = TableBuilder::new(ui)
-                .id_salt(1)
-                .striped(true)
-                .resizable(false)
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .sense(egui::Sense::click())
-                .column(Column::auto())
-                .column(Column::remainder())
-                .min_scrolled_height(0.0)
-                .max_scroll_height(available_height);
-
-            let index = ui_context
-                .boot_rom
-                .iter()
-                .position(|a| a.0 == emu_state.registers.PC)
-                .unwrap_or(0);
-            // TODO: proper handling, will error if outside of disassembled area!!!
-            // TODO: handle disassembly of RAM
-
-            if emu_state.registers.PC != ui_context.previous_pc {
-                disassembly_table =
-                    disassembly_table.scroll_to_row(index, Option::from(Align::Center));
-                ui_context.previous_pc = emu_state.registers.PC;
-            }
-
-            disassembly_table.body(|mut body| {
-                body.rows(18.0, ui_context.boot_rom.len(), |mut row| {
-                    let row_index = row.index();
-
-                    row.set_selected(ui_state.breakpoints.contains(&row_index));
-                    row.set_hovered(row_index == index);
-
-                    row.col(|ui| {
-                        ui.label(format!("{:#06X}", ui_context.boot_rom[row_index].0));
-                    });
-                    row.col(|ui| {
-                        let text = &ui_context.boot_rom[row_index].1;
-
-                        let mut job = LayoutJob {
-                            text: text.clone(),
-                            ..Default::default()
-                        };
-
-                        for (style, range) in h
-                            .highlight_line(text.as_str(), &ui_context.ps)
-                            .ok()
-                            .unwrap()
-                        {
-                            let fg = style.foreground;
-                            let text_color = egui::Color32::from_rgb(fg.r, fg.g, fg.b);
-                            let italics = style.font_style.contains(FontStyle::ITALIC);
-                            let underline = style.font_style.contains(FontStyle::ITALIC);
-                            let underline = if underline {
-                                egui::Stroke::new(1.0, text_color)
-                            } else {
-                                egui::Stroke::NONE
-                            };
-                            job.sections.push(LayoutSection {
-                                leading_space: 0.0,
-                                byte_range: as_byte_range(text.as_str(), range),
-                                format: TextFormat {
-                                    font_id: ui.style().override_font_id.clone().unwrap_or_else(
-                                        || TextStyle::Monospace.resolve(ui.style()),
-                                    ),
-                                    color: text_color,
-                                    italics,
-                                    underline,
-                                    ..Default::default()
-                                },
-                            });
-                        }
-
-                        ui.label(job);
-                    });
-
-                    ui_state.toggle_row_selection(row_index, &row.response());
-                })
-            });
-
-            // Breakpoint list
-            // TODO:
-        });
-
-    egui::TopBottomPanel::bottom("bottom_panel")
-        .exact_height(size.height as f32 - gameboy_height.round())
-        .show(egui_context, |ui| {
-            ui.horizontal(|ui| {
-                let mut logger_button = ui.button("Logger");
-                if ui_state.bottom_panel == BottomPanels::Logger {
-                    logger_button = logger_button.highlight();
-                }
-                if logger_button.clicked() {
-                    ui_state.bottom_panel = BottomPanels::Logger;
-                    puffin::set_scopes_on(false);
-                }
-
-                let mut profiler_button = ui.button("Profiler");
-                if ui_state.bottom_panel == BottomPanels::Profiler {
-                    profiler_button = profiler_button.highlight();
-                }
-                if profiler_button.clicked() {
-                    ui_state.bottom_panel = BottomPanels::Profiler;
-                    puffin::set_scopes_on(true);
-                }
-            });
-
-            ui.separator();
-
-            if ui_state.bottom_panel == BottomPanels::Logger {
-                egui_logger::logger_ui().show_target(true).show(ui);
-            } else if ui_state.bottom_panel == BottomPanels::Profiler {
-                puffin_egui::profiler_ui(ui);
-            }
-        });
 }
 
 fn as_byte_range(whole: &str, range: &str) -> std::ops::Range<usize> {

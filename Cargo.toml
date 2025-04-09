@@ -4,24 +4,53 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Rendering
 vulkano = "0.35.0"
 vulkano-shaders = "0.35.0"
 vulkano-util = "0.35.0"
-egui = "0.31.0"
-egui_extras = { version = "0.31.0", features = ["syntect"] }
-egui-winit = "0.31.0"
 winit = "0.30.8"
-png = "0.17.16"
-serde_json = "1.0"
+# GUI
+egui = "0.31.1"
+egui_extras = { version = "0.31.1", features = ["syntect", "all_loaders"] }
+ehttp = "0.5.0"
+urlencoding = "2.1.3"
+mime_guess2 = "2.3.0"
+# Remove clipboard from egui-winit, which is default, as it uses smithay-clipboard which causes crashes on exit
+# due to not cleaning up registry before destroying the queue, this will probably be fixed by the wl_fixes protocol?
+# The warning still persists with this, but it exits cleanly, therefore being faster and no longer keeps triggering
+# while debugging
+egui-winit = { version = "0.31.1", features = ["links", "wayland", "x11"], default-features = false }
 syntect = "5.2.0"
 image = "0.25.5"
-intbits = "0.2.0"
-egui_logger = { git = "https://github.com/rnd-ash/egui_logger.git" }
+egui_material_icons = "0.3.0"
+# Logging
+egui_logger = "0.6.3"
 log = "0.4.26"
 flexi_logger = "0.29.8"
 multi_log = "0.1.2"
-puffin = { git = "https://github.com/tedsteen/puffin.git", branch = "upgrade-egui" }
-puffin_egui = { git = "https://github.com/tedsteen/puffin.git", branch = "upgrade-egui" }
+# Audio
+blip_buf = "0.1.5"
+cpal = "0.15.3"
+# Bit access
+intbits = "0.2.0"
+bitbybit = "1.3.3"
+arbitrary-int = "1.3.0"
+# JIT
+inkwell = { features = ["llvm18-0"], version = "0.5.0" }
+llvm-plugin = { version = "0.6", features = ["llvm18-0"] }
+# Profiling
+puffin = { git = "https://github.com/bcvandendool/puffin.git", branch = "main" }
+puffin_egui = { git = "https://github.com/bcvandendool/puffin.git", branch = "main" }
+fastant = "0.1.10"
+# Settings
+arc-swap = "1.7.1"
+figment = { version = "0.10", features = ["toml"] }
+serde = { version = "1.0.219", features = ["derive"] }
+toml = "0.8.20"
+directories = "6.0.0"
+# Misc
+rand = "0.9.0"
+rfd = "0.15.3"
 
 [dev-dependencies]
 test-case = "3.3.1"

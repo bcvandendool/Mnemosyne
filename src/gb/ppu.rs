@@ -1,4 +1,7 @@
+use arbitrary_int::u3;
+use bitbybit::bitfield;
 use egui::ahash::HashSetExt;
+use intbits::Bits;
 use std::cmp::PartialEq;
 use std::collections::VecDeque;
 
@@ -48,6 +51,27 @@ struct Sprite {
     tile_index: u8,
     attributes: u8,
     oam_index: u8,
+}
+
+#[bitfield(u8)]
+struct OAMAttributes {
+    #[bit(7, rw)]
+    priority: bool,
+
+    #[bit(6, rw)]
+    y_flip: bool,
+
+    #[bit(5, rw)]
+    x_flip: bool,
+
+    #[bit(4, rw)]
+    dmg_palette: bool,
+
+    #[bit(3, rw)]
+    bank: bool,
+
+    #[bits(0..=2, rw)]
+    cgm_palette: u3,
 }
 
 impl Sprite {
@@ -109,7 +133,7 @@ pub(crate) struct PPU {
     pub(crate) tile_data: [u8; 6144],
     pub(crate) background_map_1: [u8; 1024],
     pub(crate) background_map_2: [u8; 1024],
-    object_attribute_memory: [u8; 160],
+    pub(crate) object_attribute_memory: [u8; 160],
     // Registers
     reg_LCDC: u8,            // LCD Control
     pub(crate) reg_STAT: u8, // LCD status
@@ -162,275 +186,273 @@ impl PPU {
             // Interrupts
             int_vblank: false,
             mode_transitioned: false,
-            lyc_ly_handled: false,
+            lyc_ly_handled: true,
         }
     }
 
-    pub(crate) fn tick(&mut self, cycles: u32) {
-        puffin::profile_scope!("emulate ppu");
-        for _ in 0..cycles {
-            match self.ppu_mode {
-                PPUMode::HorizontalBlank => {
-                    if self.dot_counter == 455 {
-                        if self.reg_LY == 143 {
-                            self.ppu_mode = PPUMode::VerticalBlank;
-                            self.mode_transitioned = true;
-                            self.int_vblank = true;
-                            self.frame_buffer_vblanked = self.frame_buffer.to_vec();
-                        } else {
-                            self.ppu_mode = PPUMode::OAMScan;
-                            self.oam_buffer.clear();
-                            self.mode_transitioned = true;
-                        }
-                        self.dot_counter = 0;
-                        self.reg_LY += 1;
-                        continue;
-                    }
-                }
-                PPUMode::VerticalBlank => {
-                    if self.reg_LY == 153 && self.dot_counter == 4 {
-                        self.reg_LY = 0;
-                    }
-
-                    if self.dot_counter == 455 {
-                        self.dot_counter = 0;
-                        // Check if final line, LY is already set to 0 due to "scanline 153 quirk"
-                        if self.reg_LY == 0 {
-                            self.reg_LY = 0;
-                            self.window_y = 0;
-                            self.ppu_mode = PPUMode::OAMScan;
-                            self.oam_buffer.clear();
-                            self.mode_transitioned = true;
-                            continue;
-                        } else {
-                            self.reg_LY += 1;
-                        }
-                    }
-                }
-                PPUMode::OAMScan => {
-                    if self.dot_counter % 2 == 0 {
-                        // Check if sprite should be added to buffer
-                        let sprite_idx = self.dot_counter / 2;
-                        let mut sprite = Sprite::new(
-                            &self.object_attribute_memory,
-                            (sprite_idx * 4) as usize,
-                            0,
-                        );
-
-                        if self.reg_LY + 16 >= sprite.y
-                            && self.reg_LY + 16
-                                < sprite.y + if self.reg_LCDC & 0b100 > 0 { 16 } else { 8 }
-                            && self.oam_buffer.len() < 10
-                        {
-                            sprite.oam_index = self.oam_buffer.len() as u8;
-                            self.oam_buffer.push(sprite);
-                        }
-                    }
-                    if self.dot_counter == 79 {
-                        self.ppu_mode = PPUMode::DrawingPixels;
+    pub(crate) fn tick(&mut self) {
+        match self.ppu_mode {
+            PPUMode::HorizontalBlank => {
+                if self.dot_counter == 455 {
+                    if self.reg_LY == 143 {
+                        self.ppu_mode = PPUMode::VerticalBlank;
+                        self.reg_STAT.set_bits(0..2, 1);
                         self.mode_transitioned = true;
-                        self.fetcher_state = FetcherState::InitialBgFetch { dots_remaining: 6 };
-                        self.oam_buffer
-                            .sort_by(|a, b| a.x.cmp(&b.x).then(a.oam_index.cmp(&b.oam_index)));
+                        self.int_vblank = true;
+                        self.frame_buffer_vblanked = self.frame_buffer.to_vec();
+                    } else {
+                        self.ppu_mode = PPUMode::OAMScan;
+                        self.reg_STAT.set_bits(0..2, 2);
+                        self.oam_buffer.clear();
+                        self.mode_transitioned = true;
+                    }
+                    self.dot_counter = 0;
+                    self.reg_LY += 1;
+                    return;
+                }
+            }
+            PPUMode::VerticalBlank => {
+                if self.reg_LY == 153 && self.dot_counter == 4 {
+                    self.reg_LY = 0;
+                }
+
+                if self.dot_counter == 455 {
+                    self.dot_counter = 0;
+                    // Check if final line, LY is already set to 0 due to "scanline 153 quirk"
+                    if self.reg_LY == 0 {
+                        self.reg_LY = 0;
+                        self.window_y = 0;
+                        self.ppu_mode = PPUMode::OAMScan;
+                        self.reg_STAT.set_bits(0..2, 2);
+                        self.oam_buffer.clear();
+                        self.mode_transitioned = true;
+                        return;
+                    } else {
+                        self.reg_LY += 1;
                     }
                 }
-                PPUMode::DrawingPixels => {
-                    match self.fetcher_state {
-                        FetcherState::InitialBgFetch { dots_remaining } => {
-                            if dots_remaining == 0 {
-                                self.pixel_fifo.clear();
-                                self.fetch_bg_tile(0);
-                                self.fetcher_state = FetcherState::RenderingTile {
-                                    dots_remaining: 8,
-                                    screen_x: 0_u8.wrapping_sub(self.reg_SCX % 8),
-                                    fetcher_x: 0,
-                                    rendering_background: true,
-                                    sprite_fetch_delayed: false,
-                                }
-                            } else {
-                                self.fetcher_state = FetcherState::InitialBgFetch {
-                                    dots_remaining: dots_remaining - 1,
-                                }
-                            }
-                        }
-                        FetcherState::InitialWindowFetch {
-                            dots_remaining,
-                            screen_x,
-                        } => {
-                            if dots_remaining == 0 {
-                                self.fetcher_state = FetcherState::RenderingTile {
-                                    dots_remaining: 8,
-                                    screen_x,
-                                    fetcher_x: 1,
-                                    rendering_background: false,
-                                    sprite_fetch_delayed: false,
-                                }
-                            } else {
-                                self.fetcher_state = FetcherState::InitialWindowFetch {
-                                    dots_remaining: dots_remaining - 1,
-                                    screen_x,
-                                }
-                            }
-                        }
-                        FetcherState::SpriteFetch {
-                            dots_remaining,
-                            render_dots_remaining,
-                            render_screen_x,
-                            render_fetcher_x,
-                            render_rendering_background,
-                            render_sprite_fetch_delayed,
-                        } => {
-                            if dots_remaining == 1 {
-                                self.fetcher_state = FetcherState::RenderingTile {
-                                    dots_remaining: render_dots_remaining,
-                                    screen_x: render_screen_x,
-                                    fetcher_x: render_fetcher_x,
-                                    rendering_background: render_rendering_background,
-                                    sprite_fetch_delayed: render_sprite_fetch_delayed,
-                                };
-                            } else {
-                                self.fetcher_state = FetcherState::SpriteFetch {
-                                    dots_remaining: dots_remaining - 1,
-                                    render_dots_remaining,
-                                    render_screen_x,
-                                    render_fetcher_x,
-                                    render_rendering_background,
-                                    render_sprite_fetch_delayed,
-                                };
-                            }
-                        }
-                        FetcherState::RenderingTile {
-                            mut dots_remaining,
-                            mut screen_x,
-                            mut fetcher_x,
-                            rendering_background,
-                            mut sprite_fetch_delayed,
-                        } => {
-                            // Check for sprites
-                            if self.oam_buffer.iter().any(|sprite| sprite.x == screen_x) {
-                                let sprite = self.oam_buffer.remove(
-                                    self.oam_buffer
-                                        .iter()
-                                        .position(|sprite| sprite.x == screen_x)
-                                        .unwrap(),
-                                );
+            }
+            PPUMode::OAMScan => {
+                if self.dot_counter % 2 == 0 {
+                    // Check if sprite should be added to buffer
+                    let sprite_idx = self.dot_counter / 2;
+                    let mut sprite =
+                        Sprite::new(&self.object_attribute_memory, (sprite_idx * 4) as usize, 0);
 
-                                if self.reg_LCDC & 0b10 > 0 {
-                                    self.fetch_sprite_tile(sprite);
-                                    let sprite_fetch_cycles = if !sprite_fetch_delayed
-                                        && (4..9).contains(&dots_remaining)
-                                    {
+                    if self.reg_LY + 16 >= sprite.y
+                        && self.reg_LY + 16
+                            < sprite.y + if self.reg_LCDC & 0b100 > 0 { 16 } else { 8 }
+                        && self.oam_buffer.len() < 10
+                    {
+                        sprite.oam_index = self.oam_buffer.len() as u8;
+                        self.oam_buffer.push(sprite);
+                    }
+                }
+                if self.dot_counter == 79 {
+                    self.ppu_mode = PPUMode::DrawingPixels;
+                    self.reg_STAT.set_bits(0..2, 3);
+                    self.mode_transitioned = true;
+                    self.fetcher_state = FetcherState::InitialBgFetch { dots_remaining: 6 };
+                    self.oam_buffer
+                        .sort_by(|a, b| a.x.cmp(&b.x).then(a.oam_index.cmp(&b.oam_index)));
+                }
+            }
+            PPUMode::DrawingPixels => {
+                match self.fetcher_state {
+                    FetcherState::InitialBgFetch { dots_remaining } => {
+                        if dots_remaining == 0 {
+                            self.pixel_fifo.clear();
+                            self.fetch_bg_tile(0);
+                            self.fetcher_state = FetcherState::RenderingTile {
+                                dots_remaining: 8,
+                                screen_x: 0_u8.wrapping_sub(self.reg_SCX % 8),
+                                fetcher_x: 0,
+                                rendering_background: true,
+                                sprite_fetch_delayed: false,
+                            }
+                        } else {
+                            self.fetcher_state = FetcherState::InitialBgFetch {
+                                dots_remaining: dots_remaining - 1,
+                            }
+                        }
+                    }
+                    FetcherState::InitialWindowFetch {
+                        dots_remaining,
+                        screen_x,
+                    } => {
+                        if dots_remaining == 0 {
+                            self.fetcher_state = FetcherState::RenderingTile {
+                                dots_remaining: 8,
+                                screen_x,
+                                fetcher_x: 1,
+                                rendering_background: false,
+                                sprite_fetch_delayed: false,
+                            }
+                        } else {
+                            self.fetcher_state = FetcherState::InitialWindowFetch {
+                                dots_remaining: dots_remaining - 1,
+                                screen_x,
+                            }
+                        }
+                    }
+                    FetcherState::SpriteFetch {
+                        dots_remaining,
+                        render_dots_remaining,
+                        render_screen_x,
+                        render_fetcher_x,
+                        render_rendering_background,
+                        render_sprite_fetch_delayed,
+                    } => {
+                        if dots_remaining == 1 {
+                            self.fetcher_state = FetcherState::RenderingTile {
+                                dots_remaining: render_dots_remaining,
+                                screen_x: render_screen_x,
+                                fetcher_x: render_fetcher_x,
+                                rendering_background: render_rendering_background,
+                                sprite_fetch_delayed: render_sprite_fetch_delayed,
+                            };
+                        } else {
+                            self.fetcher_state = FetcherState::SpriteFetch {
+                                dots_remaining: dots_remaining - 1,
+                                render_dots_remaining,
+                                render_screen_x,
+                                render_fetcher_x,
+                                render_rendering_background,
+                                render_sprite_fetch_delayed,
+                            };
+                        }
+                    }
+                    FetcherState::RenderingTile {
+                        mut dots_remaining,
+                        mut screen_x,
+                        mut fetcher_x,
+                        rendering_background,
+                        mut sprite_fetch_delayed,
+                    } => {
+                        // Check for sprites
+                        if self.oam_buffer.iter().any(|sprite| sprite.x == screen_x) {
+                            let sprite = self.oam_buffer.remove(
+                                self.oam_buffer
+                                    .iter()
+                                    .position(|sprite| sprite.x == screen_x)
+                                    .unwrap(),
+                            );
+
+                            if self.reg_LCDC & 0b10 > 0 {
+                                self.fetch_sprite_tile(sprite);
+                                let sprite_fetch_cycles =
+                                    if !sprite_fetch_delayed && (4..9).contains(&dots_remaining) {
                                         sprite_fetch_delayed = true;
                                         6 + dots_remaining - 3
                                     } else {
                                         6
                                     };
 
-                                    self.fetcher_state = FetcherState::SpriteFetch {
-                                        dots_remaining: sprite_fetch_cycles - 1,
-                                        render_dots_remaining: dots_remaining,
-                                        render_screen_x: screen_x,
-                                        render_fetcher_x: fetcher_x,
-                                        render_rendering_background: rendering_background,
-                                        render_sprite_fetch_delayed: sprite_fetch_delayed,
-                                    };
-                                    continue;
-                                }
-
-                                while self.oam_buffer.iter().any(|sprite| sprite.x == screen_x) {
-                                    self.oam_buffer.remove(
-                                        self.oam_buffer
-                                            .iter()
-                                            .position(|sprite| sprite.x == screen_x)
-                                            .unwrap(),
-                                    );
-                                }
+                                self.fetcher_state = FetcherState::SpriteFetch {
+                                    dots_remaining: sprite_fetch_cycles - 1,
+                                    render_dots_remaining: dots_remaining,
+                                    render_screen_x: screen_x,
+                                    render_fetcher_x: fetcher_x,
+                                    render_rendering_background: rendering_background,
+                                    render_sprite_fetch_delayed: sprite_fetch_delayed,
+                                };
+                                return;
                             }
 
-                            // Check if window has started
-                            if self.reg_LCDC & 0b100000 > 0
+                            while self.oam_buffer.iter().any(|sprite| sprite.x == screen_x) {
+                                self.oam_buffer.remove(
+                                    self.oam_buffer
+                                        .iter()
+                                        .position(|sprite| sprite.x == screen_x)
+                                        .unwrap(),
+                                );
+                            }
+                        }
+
+                        // Check if window has started
+                        if self.reg_LCDC & 0b100000 > 0
                                 && self.reg_WY <= self.reg_LY // TODO: change this to have it only have been == once in the frame
                                 && screen_x == self.reg_WX.wrapping_add(1)
                                 && screen_x <= 160 + 7
                                 && rendering_background
+                        {
+                            self.pixel_fifo.clear();
+                            self.fetch_window_tile(0);
+                            self.fetcher_state = FetcherState::InitialWindowFetch {
+                                dots_remaining: 5,
+                                screen_x,
+                            };
+                            return;
+                        }
+
+                        if dots_remaining == 2 {
+                            if rendering_background {
+                                self.fetch_bg_tile(fetcher_x);
+                            } else {
+                                self.fetch_window_tile(fetcher_x);
+                            }
+                            fetcher_x = fetcher_x.wrapping_add(1);
+                        }
+
+                        let bg_pixel = self
+                            .pixel_fifo
+                            .pop_front()
+                            .expect("There should always be a background pixel");
+                        let sprite_pixel = self.sprite_fifo.pop_front().unwrap_or(PixelInfo {
+                            color: 0,
+                            palette: 0,
+                            sprite_priority: false,
+                            background_priority: true,
+                        });
+
+                        if (8..160 + 8).contains(&screen_x) {
+                            let mut color = if sprite_pixel.color != 0
+                                && !(bg_pixel.color != 0
+                                    && self.reg_LCDC & 0b1 > 0
+                                    && sprite_pixel.background_priority)
                             {
-                                self.pixel_fifo.clear();
-                                self.fetch_window_tile(0);
-                                self.fetcher_state = FetcherState::InitialWindowFetch {
-                                    dots_remaining: 5,
-                                    screen_x,
-                                };
-                                continue;
-                            }
-
-                            if dots_remaining == 2 {
-                                if rendering_background {
-                                    self.fetch_bg_tile(fetcher_x);
-                                } else {
-                                    self.fetch_window_tile(fetcher_x);
-                                }
-                                fetcher_x = fetcher_x.wrapping_add(1);
-                            }
-
-                            let bg_pixel = self
-                                .pixel_fifo
-                                .pop_front()
-                                .expect("There should always be a background pixel");
-                            let sprite_pixel = self.sprite_fifo.pop_front().unwrap_or(PixelInfo {
-                                color: 0,
-                                palette: 0,
-                                sprite_priority: false,
-                                background_priority: true,
-                            });
-
-                            if (8..160 + 8).contains(&screen_x) {
-                                let mut color = if sprite_pixel.color != 0
-                                    && !(bg_pixel.color != 0
-                                        && self.reg_LCDC & 0b1 > 0
-                                        && sprite_pixel.background_priority)
-                                {
-                                    // Output sprite pixel
-                                    self.get_sprite_color(sprite_pixel.palette, sprite_pixel.color)
-                                } else if self.reg_LCDC & 0b1 > 0 {
-                                    // Output background / window pixel
-                                    self.get_color(bg_pixel.color)
-                                } else {
-                                    0
-                                };
-
-                                self.frame_buffer
-                                    [self.reg_LY as usize * 160 + screen_x as usize - 8] = color;
-                            }
-                            screen_x = screen_x.wrapping_add(1);
-
-                            if dots_remaining == 1 {
-                                dots_remaining = 8;
-                                sprite_fetch_delayed = false;
+                                // Output sprite pixel
+                                self.get_sprite_color(sprite_pixel.palette, sprite_pixel.color)
+                            } else if self.reg_LCDC & 0b1 > 0 {
+                                // Output background / window pixel
+                                self.get_color(bg_pixel.color)
                             } else {
-                                dots_remaining -= 1;
-                            }
+                                0
+                            };
 
-                            if screen_x == 160 + 8 {
-                                if !rendering_background {
-                                    self.window_y += 1;
-                                }
-                                self.ppu_mode = PPUMode::HorizontalBlank;
-                                self.mode_transitioned = true;
-                            } else {
-                                self.fetcher_state = FetcherState::RenderingTile {
-                                    dots_remaining,
-                                    screen_x,
-                                    fetcher_x,
-                                    rendering_background,
-                                    sprite_fetch_delayed,
-                                };
+                            self.frame_buffer[self.reg_LY as usize * 160 + screen_x as usize - 8] =
+                                color;
+                        }
+                        screen_x = screen_x.wrapping_add(1);
+
+                        if dots_remaining == 1 {
+                            dots_remaining = 8;
+                            sprite_fetch_delayed = false;
+                        } else {
+                            dots_remaining -= 1;
+                        }
+
+                        if screen_x == 160 + 8 {
+                            if !rendering_background {
+                                self.window_y += 1;
                             }
+                            self.ppu_mode = PPUMode::HorizontalBlank;
+                            self.reg_STAT.set_bits(0..2, 0);
+                            self.mode_transitioned = true;
+                        } else {
+                            self.fetcher_state = FetcherState::RenderingTile {
+                                dots_remaining,
+                                screen_x,
+                                fetcher_x,
+                                rendering_background,
+                                sprite_fetch_delayed,
+                            };
                         }
                     }
                 }
             }
-            self.dot_counter += 1;
         }
+        self.dot_counter += 1;
     }
 
     fn fetch_sprite_tile(&mut self, sprite: Sprite) {
@@ -454,7 +476,7 @@ impl PPU {
         let tile_lo = self.tile_data[tile_address as usize - 0x8000];
         let tile_hi = self.tile_data[tile_address as usize - 0x8000 + 1];
 
-        for i in self.sprite_fifo.len()..8 {
+        for _ in self.sprite_fifo.len()..8 {
             self.sprite_fifo.push_back(PixelInfo {
                 color: 0,
                 palette: 0,
@@ -471,15 +493,13 @@ impl PPU {
                     .get(i)
                     .is_some_and(|pixel| pixel.color == 0)
             {
-                self.sprite_fifo.insert(
-                    i,
-                    PixelInfo {
-                        color: ((tile_hi >> idx) & 1) << 1 | ((tile_lo >> idx) & 1),
-                        palette: u8::from(sprite.attr_dmg_palette()),
-                        sprite_priority: false,
-                        background_priority: sprite.attr_priority(),
-                    },
-                )
+                let test = self.sprite_fifo.get_mut(i).unwrap();
+                *test = PixelInfo {
+                    color: ((tile_hi >> idx) & 1) << 1 | ((tile_lo >> idx) & 1),
+                    palette: u8::from(sprite.attr_dmg_palette()),
+                    sprite_priority: false,
+                    background_priority: sprite.attr_priority(),
+                };
             }
         }
     }
@@ -608,6 +628,22 @@ impl PPU {
         }
     }
 
+    fn update_reg_STAT(&mut self) {
+        self.reg_STAT.set_bit(2, self.reg_LYC == self.reg_LY);
+
+        if self.reg_LCDC.bit(7) {
+            let value = match self.ppu_mode {
+                PPUMode::HorizontalBlank => 0,
+                PPUMode::VerticalBlank => 1,
+                PPUMode::OAMScan => 2,
+                PPUMode::DrawingPixels => 3,
+            };
+            self.reg_STAT.set_bits(0..2, value);
+        } else {
+            self.reg_STAT.set_bits(0..2, 0);
+        }
+    }
+
     pub(crate) fn read(&self, address: u16) -> u8 {
         match address {
             0x8000..=0x97FF => self.tile_data[address as usize - 0x8000],
@@ -643,8 +679,11 @@ impl PPU {
             0x9800..=0x9BFF => self.background_map_1[address as usize - 0x9800] = value,
             0x9C00..=0x9FFF => self.background_map_2[address as usize - 0x9C00] = value,
             0xFE00..=0xFE9F => self.object_attribute_memory[address as usize - 0xFE00] = value,
+            0xFEA0..=0xFEFF => {
+                // TODO: OAM corruption
+            }
             0xFF40 => self.reg_LCDC = value,
-            0xFF41 => self.reg_STAT = value,
+            0xFF41 => self.reg_STAT = value & 0xF8,
             0xFF42 => self.reg_SCY = value,
             0xFF43 => self.reg_SCX = value,
             0xFF44 => self.reg_LY = value,

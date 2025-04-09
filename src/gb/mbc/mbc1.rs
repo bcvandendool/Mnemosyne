@@ -1,6 +1,10 @@
-use crate::gameboy::mbc::MBC;
+use crate::config;
+use crate::gb::mbc::MBC;
 use intbits::Bits;
 use log::{log, Level};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 
 pub struct MBC1 {
     name: String,
@@ -51,7 +55,7 @@ impl MBC for MBC1 {
                 self.rom[mapped_address]
             }
             0xA000..=0xBFFF => {
-                if self.has_ram && self.reg_ram_enabled {
+                if self.has_ram && self.reg_ram_enabled && self.ram_size > 0 {
                     let mut mapped_address = if self.reg_banking_mode {
                         ((self.reg_ram_bank_number as usize) << 13) | (address.bits(0..13) as usize)
                     } else {
@@ -74,7 +78,9 @@ impl MBC for MBC1 {
             0x0000..=0x1FFF => {
                 // RAM enable
                 self.reg_ram_enabled = value.bits(0..4) == 0x0A;
-                // TODO: save on disable
+                if !self.reg_ram_enabled {
+                    self.save_ram();
+                }
             }
             0x2000..=0x3FFF => {
                 // ROM bank number
@@ -89,7 +95,7 @@ impl MBC for MBC1 {
                 self.reg_banking_mode = value.bit(0);
             }
             0xA000..=0xBFFF => {
-                if self.has_ram && self.reg_ram_enabled {
+                if self.has_ram && self.reg_ram_enabled && self.ram_size > 0 {
                     let mut mapped_address = if self.reg_banking_mode {
                         ((self.reg_ram_bank_number as usize) << 13) | (address.bits(0..13) as usize)
                     } else {
@@ -109,6 +115,43 @@ impl MBC for MBC1 {
     }
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    fn save_ram(&self) {
+        if self.has_ram {
+            let file: Option<File> = config::THREAD_LOCAL_CONFIG.with(|c| {
+                let mut binding = c.borrow_mut();
+                let save_path = &binding.load().gameboy_config.save_path;
+                if !save_path.is_empty() {
+                    Some(File::create(save_path).expect("Failed to create save file"))
+                } else {
+                    None
+                }
+            });
+
+            if let Some(mut file) = file {
+                file.write_all(&self.ram).unwrap();
+                file.flush().unwrap();
+            }
+        }
+    }
+
+    fn load_ram(&mut self) {
+        if self.has_ram {
+            let file: Option<File> = config::THREAD_LOCAL_CONFIG.with(|c| {
+                let mut binding = c.borrow_mut();
+                let save_path = &binding.load().gameboy_config.save_path;
+                if !save_path.is_empty() {
+                    Some(File::open(save_path).expect("Failed to create save file"))
+                } else {
+                    None
+                }
+            });
+
+            if let Some(mut file) = file {
+                file.read_exact(&mut self.ram).unwrap();
+            }
+        }
     }
 }
 
