@@ -7,7 +7,7 @@ use winit::keyboard::KeyCode;
 
 pub struct IORegisters {
     // IO registers
-    FF00_JOYP: u8,
+    pub(crate) FF00_JOYP: u8,
     FF01_serial_transfer_data: u8,
     FF01_serial_transfer_buffer: Vec<char>,
     FF02_serial_transfer_control: u8,
@@ -15,7 +15,7 @@ pub struct IORegisters {
     FF05_TIMA_timer_counter: u8,
     FF06_TMA_timer_modulo: u8,
     FF07_TAC_timer_control: u8,
-    FF0F_IF_interrupt_flag: u8,
+    pub(crate) FF0F_IF_interrupt_flag: u8,
     pub(crate) FF50_boot_rom_enabled: bool,
     FFFF_IE_interrupt_enable: u8,
     // Internal state
@@ -24,6 +24,7 @@ pub struct IORegisters {
     TIMA_counter: u8,
     pub(crate) inputs: HashMap<KeyCode, bool>,
     should_update_DIV_APU: bool,
+    serial_timer: u16,
 }
 
 impl IORegisters {
@@ -47,6 +48,7 @@ impl IORegisters {
             TIMA_counter: 0,
             inputs: HashMap::new(),
             should_update_DIV_APU: false,
+            serial_timer: 0,
         }
     }
 
@@ -110,9 +112,7 @@ impl IORegisters {
                 if self.FF02_serial_transfer_control.bit(7)
                     && self.FF02_serial_transfer_control.bit(0)
                 {
-                    self.FF01_serial_transfer_data = 0xFF;
-                    self.FF02_serial_transfer_control.set_bit(7, false);
-                    self.FF0F_IF_interrupt_flag.set_bit(3, true);
+                    self.serial_timer = 8;
                 }
             }
             0xFF04 => {
@@ -199,6 +199,18 @@ impl IORegisters {
 
     pub fn update_timers(&mut self) -> bool {
         self.clock_counter = self.clock_counter.wrapping_add(1);
+
+        if self.FF02_serial_transfer_control.bit(7) && self.FF02_serial_transfer_control.bit(0) {
+            if self.serial_timer > 0 && self.clock_counter.bits(0..9) == 0 {
+                self.serial_timer -= 1;
+            }
+
+            if self.serial_timer == 0 {
+                self.FF02_serial_transfer_control.set_bit(7, false);
+                self.FF0F_IF_interrupt_flag.set_bit(3, true);
+                self.FF01_serial_transfer_data = 0xFF;
+            }
+        }
 
         let mut DIV_APU = self.should_update_DIV_APU;
         self.should_update_DIV_APU = false;

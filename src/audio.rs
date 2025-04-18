@@ -1,12 +1,12 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, Sample, Stream};
+use cpal::{FromSample, Sample, SampleRate, Stream};
 use log::{log, Level};
 use std::sync::{Arc, Mutex};
 
 pub(crate) struct AudioPlayer {
     buffer: Arc<Mutex<Vec<(f32, f32)>>>,
     pub(crate) sample_rate: cpal::SampleRate,
-    stream: Stream,
+    stream: Option<Stream>,
 }
 
 impl AudioPlayer {
@@ -16,10 +16,11 @@ impl AudioPlayer {
             .default_output_device()
             .expect("No output device available");
 
-        let wanted_samplerate = cpal::SampleRate(44100);
-        let supported_configs_range = device
-            .supported_output_configs()
-            .expect("Error while querying configs");
+        let wanted_samplerate = SampleRate(44100);
+        let supported_configs_range = match device.supported_output_configs() {
+            Ok(config_range) => config_range,
+            Err(_) => return Self::dummy(),
+        };
         let mut supported_config = None;
         for config in supported_configs_range {
             if config.channels() == 2 && config.sample_format() == cpal::SampleFormat::F32 {
@@ -57,7 +58,16 @@ impl AudioPlayer {
         AudioPlayer {
             buffer: shared_buffer,
             sample_rate: supported_config.sample_rate(),
-            stream,
+            stream: Some(stream),
+        }
+    }
+
+    pub(crate) fn dummy() -> Self {
+        let shared_buffer = Arc::new(Mutex::new(Vec::new()));
+        AudioPlayer {
+            buffer: shared_buffer,
+            sample_rate: SampleRate(44100),
+            stream: None,
         }
     }
 
@@ -72,7 +82,7 @@ impl AudioPlayer {
     }
 
     pub(crate) fn underflowed(&self) -> bool {
-        self.buffer.lock().unwrap().len() == 0
+        self.buffer.lock().unwrap().is_empty()
     }
 }
 

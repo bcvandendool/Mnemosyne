@@ -243,6 +243,7 @@ fn parse_rom_size(data: u8) -> usize {
 fn parse_ram_size(data: u8) -> usize {
     match data {
         0x00 => 0,
+        0x01 => 2048,
         0x02 => 8192,
         0x03 => 4 * 8192,
         0x04 => 16 * 8192,

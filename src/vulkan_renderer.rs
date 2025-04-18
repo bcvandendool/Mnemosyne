@@ -43,7 +43,7 @@ use vulkano_util::window::{VulkanoWindows, WindowDescriptor, WindowMode};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 
 pub(crate) trait EmulatorRenderer: Send {
-    fn sync_render_world(&self, emulator_state: &EmulatorState);
+    fn sync_render_world(&mut self, emulator_state: &EmulatorState);
     fn gpu_upload(&self, builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>);
     fn render(
         &self,

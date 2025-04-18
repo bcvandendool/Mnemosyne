@@ -183,7 +183,7 @@ impl EmulatorRenderer for GameboyRenderer {
         self.pipeline = Some(pipeline);
     }
 
-    fn sync_render_world(&self, emulator_state: &EmulatorState) {
+    fn sync_render_world(&mut self, emulator_state: &EmulatorState) {
         if let EmulatorState::GameBoy(gameboy_state) = emulator_state {
             let mut writer = self.upload_buffer.write().unwrap();
             for idx in 0..(160 * 144) {

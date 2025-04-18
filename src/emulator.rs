@@ -93,8 +93,6 @@ impl Emulator {
 
     fn run(&mut self) {
         let mut gameboy = GameBoy::new();
-        //gb.load_rom("Legend of Zelda, The - Link's Awakening.gb");
-        //gb.skip_boot_rom();
 
         let mut hit_breakpoint: bool = false;
 
@@ -111,7 +109,10 @@ impl Emulator {
                             hit_breakpoint,
                             gameboy.get_framebuffer(),
                         );
-                        let renderer = self.emulator_renderer.lock().expect("Bla");
+                        let mut renderer = self
+                            .emulator_renderer
+                            .lock()
+                            .expect("Failed to acquire render lock");
                         renderer.sync_render_world(&emu_state);
                         self.tx.send(SyncMessage::StateSynchronized(emu_state)).ok();
                     }

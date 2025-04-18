@@ -16,7 +16,8 @@ impl MBC for ROMOnly {
                 if self.has_ram {
                     self.ram[(address - 0xA000) as usize]
                 } else {
-                    panic!("Tried to read cartridge RAM which does not exist for this cartridge!")
+                    0xFF
+                    //panic!("Tried to read cartridge RAM which does not exist for this cartridge!")
                 }
             }
             _ => {
@@ -31,7 +32,7 @@ impl MBC for ROMOnly {
                 if self.has_ram {
                     self.ram[(address - 0xA000) as usize] = value;
                 } else {
-                    println!("Tried to read cartridge RAM which does not exist for this cartridge!")
+                    //println!("Tried to read cartridge RAM which does not exist for this cartridge!")
                 }
             }
             _ => {

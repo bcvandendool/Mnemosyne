@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use std::fmt::{Display, Formatter};
+use std::marker::ConstParamTy;
 
 #[derive(Clone)]
 pub struct Registers {
@@ -23,7 +24,7 @@ pub struct Registers {
     pub IR: u16,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, ConstParamTy)]
 pub enum Reg {
     A,
     B,
@@ -54,7 +55,7 @@ pub enum Flag {
     CARRY = 0x10,
 }
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug, ConstParamTy)]
 pub enum ConditionCode {
     Z,
     NZ,

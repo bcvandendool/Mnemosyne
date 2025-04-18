@@ -2,7 +2,7 @@ use crate::audio::AudioPlayer;
 use crate::gb::apu::APU;
 use crate::gb::io_registers::IORegisters;
 use crate::gb::mbc::{create_MBC, MBC};
-use crate::gb::ppu::{PPUMode, PPU};
+use crate::gb::ppu::PPU;
 use intbits::Bits;
 use rand::Rng;
 use std::fs;
@@ -212,47 +212,10 @@ impl MMU {
             self.io_registers.write(0xFF0F, value);
         }
 
-        if self.ppu.reg_LY == self.ppu.reg_LYC && !self.ppu.lyc_ly_handled {
-            // Set LYC == LY bit of reg_STAT
-            self.ppu.reg_STAT.set_bit(2, true);
-
-            if self.ppu.reg_STAT & 0b1000000 > 0 {
-                let value = self.read(0xFF0F) | 0b10;
-                self.write(0xFF0F, value);
-            }
-
-            self.ppu.lyc_ly_handled = true;
-        } else if self.ppu.reg_LY != self.ppu.reg_LYC && self.ppu.lyc_ly_handled {
-            self.ppu.lyc_ly_handled = false;
-            self.ppu.reg_STAT.set_bit(2, false);
-        }
-
-        if self.ppu.mode_transitioned {
-            if self.ppu.ppu_mode == PPUMode::HorizontalBlank {
-                //self.ppu.reg_STAT &= !0b11;
-                if self.ppu.reg_STAT & 0b1000 > 0 {
-                    let value = self.read(0xFF0F) | 0b10;
-                    self.write(0xFF0F, value);
-                }
-            } else if self.ppu.ppu_mode == PPUMode::VerticalBlank {
-                //self.ppu.reg_STAT &= !0b11;
-                //self.ppu.reg_STAT |= 0b01;
-                if self.ppu.reg_STAT & 0b10000 > 0 {
-                    let value = self.read(0xFF0F) | 0b10;
-                    self.write(0xFF0F, value);
-                }
-            } else if self.ppu.ppu_mode == PPUMode::OAMScan {
-                //self.ppu.reg_STAT &= !0b11;
-                //self.ppu.reg_STAT |= 0b10;
-                if self.ppu.reg_STAT & 0b100000 > 0 {
-                    let value = self.read(0xFF0F) | 0b10;
-                    self.write(0xFF0F, value);
-                }
-            } else {
-                //self.ppu.reg_STAT |= 0b11;
-            }
-
-            self.ppu.mode_transitioned = false;
+        if self.ppu.int_stat {
+            self.ppu.int_stat = false;
+            let value = self.read(0xFF0F) | 0b10;
+            self.write(0xFF0F, value);
         }
     }
 }

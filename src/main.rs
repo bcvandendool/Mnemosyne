@@ -1,3 +1,4 @@
+#![feature(adt_const_params)]
 mod audio;
 mod cached_ehttp_loader;
 mod config;

@@ -25,7 +25,7 @@ enum BottomPanels {
     Profiler,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Views {
     Fullscreen,
     Debugger,
@@ -76,9 +76,11 @@ impl UIContext {
             .expect("Failed to load syntax files");
         let ps = builder.build();
 
-        let mut disassembler = Disassembler::new(Path::new("./src/roms/rex-run.gb"));
+        let mut disassembler = Disassembler::new(Path::new(
+            "./tests/game-boy-test-roms/artifacts/mooneye-test-suite/acceptance/ppu/vblank_stat_intr-GS.gb",
+        ));
         disassembler.disassemble();
-        disassembler.save_sym_file(Path::new("./src/roms/rex-run.sym"));
+        //disassembler.save_sym_file(Path::new("./src/roms/rex-run.sym"));
 
         let table = disassembler.to_table();
 

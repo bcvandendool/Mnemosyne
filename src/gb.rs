@@ -4,7 +4,8 @@ use crate::gb::cpu::CPU;
 use crate::gb::mmu::MMU;
 use crate::gb::registers::Registers;
 use crate::ui::Memories;
-use winit::keyboard::PhysicalKey;
+use intbits::Bits;
+use winit::keyboard::{KeyCode, PhysicalKey};
 
 mod apu;
 pub(crate) mod breakpoints;
@@ -135,16 +136,41 @@ impl GameBoy {
     }
 
     pub fn key_pressed(&mut self, physical_key: PhysicalKey) {
+        // TODO: move function to io_registers to allow internals to remain private
         if let PhysicalKey::Code(key_code) = physical_key {
             self.cpu.mmu.io_registers.inputs.insert(key_code, true);
-            // TODO: key pressed interrupt
+            if self.cpu.mmu.io_registers.FF00_JOYP & 0x10 == 0 {
+                let dpad_keys = [
+                    KeyCode::ArrowUp,
+                    KeyCode::ArrowDown,
+                    KeyCode::ArrowLeft,
+                    KeyCode::ArrowRight,
+                ];
+                if dpad_keys.contains(&key_code) {
+                    self.cpu
+                        .mmu
+                        .io_registers
+                        .FF0F_IF_interrupt_flag
+                        .set_bit(4, true);
+                }
+            }
+
+            if self.cpu.mmu.io_registers.FF00_JOYP & 0x20 == 0 {
+                let dpad_keys = [KeyCode::KeyF, KeyCode::KeyD, KeyCode::KeyS, KeyCode::KeyA];
+                if dpad_keys.contains(&key_code) {
+                    self.cpu
+                        .mmu
+                        .io_registers
+                        .FF0F_IF_interrupt_flag
+                        .set_bit(4, true);
+                }
+            }
         }
     }
 
     pub fn key_released(&mut self, physical_key: PhysicalKey) {
         if let PhysicalKey::Code(key_code) = physical_key {
             self.cpu.mmu.io_registers.inputs.insert(key_code, false);
-            // TODO: key released interrupt
         }
     }
 }

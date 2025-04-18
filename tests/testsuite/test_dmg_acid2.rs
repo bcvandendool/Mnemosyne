@@ -30,7 +30,7 @@ fn test() {
         output_img[idx * 4 + 3] = 0xFF;
     }
 
-    let img = ImageReader::open("tests/game-boy-test-roms/artifacts/dmg-acid2/dmg-acid2-dmg.png")
+    let img = ImageReader::open("./tests/game-boy-test-roms/artifacts/dmg-acid2/dmg-acid2-dmg.png")
         .unwrap()
         .decode()
         .unwrap();

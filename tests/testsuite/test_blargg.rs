@@ -1,7 +1,7 @@
 use image::{GenericImageView, ImageReader};
 use Mnemosyne::gb::GameBoy;
 
-fn setup(rom: &str) -> GameBoy {
+pub(crate) fn setup(rom: &str) -> GameBoy {
     let mut gameboy = GameBoy::new();
     gameboy.load_rom(rom);
     gameboy.skip_boot_rom();
@@ -141,7 +141,7 @@ mod cpu_instrs {
             "./tests/game-boy-test-roms/artifacts/blargg/cpu_instrs/individual/08-misc instrs.gb",
         );
 
-        for _ in 0..250000 {
+        for _ in 0..260000 {
             gameboy.tick();
         }
         let serial_data = gameboy.serial_buffer();

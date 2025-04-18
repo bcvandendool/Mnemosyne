@@ -37,7 +37,11 @@ pub(crate) fn render(
                                     .tx_ui
                                     .send(EmulatorControlMessage::Start)
                                     .expect("Failed to send control message to emulator thread");
-                                ui_state.current_view = Views::Fullscreen;
+                                if !(ui_state.current_view == Views::Fullscreen
+                                    || ui_state.current_view == Views::Debugger)
+                                {
+                                    ui_state.current_view = Views::Fullscreen;
+                                }
                             }
                             ui.close_menu();
                         }

@@ -1,157 +1,10 @@
+mod registers;
+
 use crate::audio::AudioPlayer;
-use arbitrary_int::{u2, u3, u4, u6, Number};
-use bitbybit::bitfield;
+use arbitrary_int::{u3, Number};
 use blip_buf::BlipBuf;
 use intbits::Bits;
-
-// Global control registers
-#[bitfield(u8)]
-struct NR52 {
-    #[bit(7, rw)]
-    audio_on: bool,
-
-    #[bit(3, rw)]
-    ch4_on: bool,
-
-    #[bit(2, rw)]
-    ch3_on: bool,
-
-    #[bit(1, rw)]
-    ch2_on: bool,
-
-    #[bit(0, rw)]
-    ch1_on: bool,
-}
-
-#[bitfield(u8)]
-struct NR51 {
-    #[bit(7, r)]
-    ch4_left: bool,
-
-    #[bit(6, rw)]
-    ch3_left: bool,
-
-    #[bit(5, rw)]
-    ch2_left: bool,
-
-    #[bit(4, rw)]
-    ch1_left: bool,
-
-    #[bit(3, rw)]
-    ch4_right: bool,
-
-    #[bit(2, rw)]
-    ch3_right: bool,
-
-    #[bit(1, rw)]
-    ch2_right: bool,
-
-    #[bit(0, rw)]
-    ch1_right: bool,
-}
-
-#[bitfield(u8)]
-struct NR50 {
-    #[bit(7, rw)]
-    vin_left: bool,
-
-    #[bits(4..=6, rw)]
-    left_volume: u3,
-
-    #[bit(3, rw)]
-    vin_right: bool,
-
-    #[bits(0..=2, rw)]
-    right_volume: u3,
-}
-
-// Pulse channel registers
-#[bitfield(u8)]
-struct NR10 {
-    #[bits(4..=6, rw)]
-    pace: u3,
-
-    #[bit(3, rw)]
-    direction: bool,
-
-    #[bits(0..=2, rw)]
-    individual_step: u3,
-}
-
-#[bitfield(u8)]
-struct PulseTimerDutyCycle {
-    #[bits(6..=7, rw)]
-    wave_duty: u2,
-
-    #[bits(0..=5, w)]
-    initial_length_timer: u6,
-}
-
-// Channel 3 (Wave) registers
-#[bitfield(u8)]
-struct NR30 {
-    #[bit(7, rw)]
-    DAC_on: bool,
-}
-
-#[bitfield(u8)]
-struct NR32 {
-    #[bits(5..=6, rw)]
-    output_level: u2,
-}
-
-// Channel 4 (Noise) registers
-#[bitfield(u8)]
-struct NR41 {
-    #[bits(0..=5, rw)]
-    initial_length_timer: u6,
-}
-
-#[bitfield(u8)]
-struct NR43 {
-    #[bits(4..=7, rw)]
-    clock_shift: u4,
-
-    #[bit(3, rw)]
-    lsfr_width: bool,
-
-    #[bits(0..=2, rw)]
-    clock_divider: u3,
-}
-
-#[bitfield(u8)]
-struct NR44 {
-    #[bit(7, w)]
-    trigger: bool,
-
-    #[bit(6, rw)]
-    length_enable: bool,
-}
-
-// Generic channel registers
-#[bitfield(u8)]
-struct PeriodHighControl {
-    #[bit(7, w)]
-    trigger: bool,
-
-    #[bit(6, rw)]
-    length_enable: bool,
-
-    #[bits(0..=2, r,w)]
-    period: u3,
-}
-
-#[bitfield(u8)]
-struct VolumeEnvelope {
-    #[bits(4..=7, rw)]
-    initial_volume: u4,
-
-    #[bit(3, rw)]
-    env_dir: bool,
-
-    #[bits(0..=2, rw)]
-    sweep_pace: u3,
-}
+use registers::*;
 
 const WAVE_PATTERN_DUTIES: [[u8; 8]; 4] = [
     [0, 0, 0, 0, 0, 0, 0, 1], // 12.5% duty cycle
@@ -706,27 +559,27 @@ impl APU {
 
     pub(crate) fn read(&self, address: u16) -> u8 {
         match address {
-            0xFF10 => self.reg_NR10.raw_value | 0x80,
-            0xFF11 => self.reg_NR11.raw_value | 0x3F,
-            0xFF12 => self.reg_NR12.raw_value,
+            0xFF10 => self.reg_NR10.raw_value() | 0x80,
+            0xFF11 => self.reg_NR11.raw_value() | 0x3F,
+            0xFF12 => self.reg_NR12.raw_value(),
             0xFF13 => 0xFF,
-            0xFF14 => self.reg_NR14.raw_value | 0xBF,
-            0xFF16 => self.reg_NR21.raw_value | 0x3F,
-            0xFF17 => self.reg_NR22.raw_value,
+            0xFF14 => self.reg_NR14.raw_value() | 0xBF,
+            0xFF16 => self.reg_NR21.raw_value() | 0x3F,
+            0xFF17 => self.reg_NR22.raw_value(),
             0xFF18 => 0xFF,
-            0xFF19 => self.reg_NR24.raw_value | 0xBF,
-            0xFF1A => self.reg_NR30.raw_value | 0x7F,
+            0xFF19 => self.reg_NR24.raw_value() | 0xBF,
+            0xFF1A => self.reg_NR30.raw_value() | 0x7F,
             0xFF1B => 0xFF,
-            0xFF1C => self.reg_NR32.raw_value | 0x9F,
+            0xFF1C => self.reg_NR32.raw_value() | 0x9F,
             0xFF1D => 0xFF,
-            0xFF1E => self.reg_NR34.raw_value | 0xBF,
+            0xFF1E => self.reg_NR34.raw_value() | 0xBF,
             0xFF20 => 0xFF,
-            0xFF21 => self.reg_NR42.raw_value,
-            0xFF22 => self.reg_NR43.raw_value,
-            0xFF23 => self.reg_NR44.raw_value | 0xBF,
-            0xFF24 => self.reg_NR50.raw_value,
-            0xFF25 => self.reg_NR51.raw_value,
-            0xFF26 => self.reg_NR52.raw_value | 0x70,
+            0xFF21 => self.reg_NR42.raw_value(),
+            0xFF22 => self.reg_NR43.raw_value(),
+            0xFF23 => self.reg_NR44.raw_value() | 0xBF,
+            0xFF24 => self.reg_NR50.raw_value(),
+            0xFF25 => self.reg_NR51.raw_value(),
+            0xFF26 => self.reg_NR52.raw_value() | 0x70,
             0xFF30..=0xFF3F => {
                 if self.reg_NR52.ch3_on() {
                     if self.just_read_ch3 {
